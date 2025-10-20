@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Location: ./mcp-servers/python/docx_server/src/docx_server/server_fastmcp.py
+"""Location: ./mcp-servers/python/granite-vision-server/src/granite-vision-server/server_fastmcp.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
-Authors: Mihai Criveti
+Authors: Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed Kazmi
+Granite Vision MCP Server - FastMCP Implementation
 
-DOCX MCP Server - FastMCP Implementation
-
-A comprehensive MCP server for creating, editing, and analyzing Microsoft Word (.docx) documents.
-Provides tools for document creation, text manipulation, formatting, and document analysis.
 """
 
 import logging
@@ -16,8 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from docx import Document
-from docx.shared import Pt
+
 from fastmcp import FastMCP
 from pydantic import Field
 
@@ -31,7 +27,6 @@ logger = logging.getLogger(__name__)
 
 # Create FastMCP server instance
 mcp = FastMCP("docx-server")
-
 
 class DocumentOperation:
     """Handles document operations."""
