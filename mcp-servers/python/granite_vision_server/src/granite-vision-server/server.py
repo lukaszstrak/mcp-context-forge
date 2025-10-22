@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Location: ./mcp-servers/python/granite-vision-server/src/granite-vision-server/server_fastmcp.py
+"""Location: ./mcp-servers/python/granite-vision-server/src/granite-vision-server/server.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
 Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed Kazmi
@@ -26,7 +26,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Create FastMCP server instance
-mcp = FastMCP("docx-server")
+mcp = FastMCP("granite-vision-server")
 
 class DocumentOperation:
     """Handles document operations."""

@@ -162,7 +162,7 @@ make install
 make dev
 
 # Or directly
-python -m granite_vision_server.server_fastmcp
+python -m granite_vision_server.server
 ```
 
 ### HTTP Bridge
@@ -180,7 +180,7 @@ make serve-http
   "mcpServers": {
     "docx-server": {
       "command": "python",
-      "args": ["-m", "granite_vision_server.server_fastmcp"],
+      "args": ["-m", "granite_vision_server.server"],
       "cwd": "/path/to/granite_vision_server"
     }
   }

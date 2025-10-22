@@ -33,7 +33,7 @@ build-backend = "hatchling.build"
 packages = ["src/granite_vision_server"]
 
 [project.scripts]
-granite-vision-server = "granite_vision_server.server_fastmcp:main"
+granite-vision-server = "granite_vision_server.server:main"
 
 [tool.black]
 line-length = 100
