@@ -26,20 +26,20 @@ format: ## Format (black + ruff --fix)
 	black . && ruff --fix .
 
 lint: ## Lint (ruff, mypy)
-	ruff check . && mypy src/docx_server
+	ruff check . && mypy src/granite_vision_server
 
 test: ## Run tests
-	pytest -v --cov=docx_server --cov-report=term-missing
+	pytest -v --cov=granite_vision_server --cov-report=term-missing
 
 dev: ## Run FastMCP server (stdio)
 	@echo "Starting DOCX FastMCP server..."
-	$(PYTHON) -m docx_server.server_fastmcp
+	$(PYTHON) -m granite_vision_server.server_fastmcp
 
 mcp-info: ## Show MCP client config
 	@echo "==================== MCP CLIENT CONFIGURATION ===================="
 	@echo ""
 	@echo "FastMCP Server:"
-	@echo '{"command": "python", "args": ["-m", "docx_server.server_fastmcp"], "cwd": "'$(PWD)'"}'
+	@echo '{"command": "python", "args": ["-m", "granite_vision_server.server_fastmcp"], "cwd": "'$(PWD)'"}'
 	@echo ""
 	@echo "=================================================================="
 
@@ -47,13 +47,13 @@ serve-http: ## Run with native FastMCP HTTP
 	@echo "Starting FastMCP server with native HTTP support..."
 	@echo "HTTP endpoint: http://$(HTTP_HOST):$(HTTP_PORT)/mcp/"
 	@echo "API docs: http://$(HTTP_HOST):$(HTTP_PORT)/docs"
-	$(PYTHON) -m docx_server.server_fastmcp --transport http --host $(HTTP_HOST) --port $(HTTP_PORT)
+	$(PYTHON) -m granite_vision_server.server_fastmcp --transport http --host $(HTTP_HOST) --port $(HTTP_PORT)
 
 serve-sse: ## Run with mcpgateway.translate (SSE bridge)
 	@echo "Starting with translate SSE bridge..."
 	@echo "SSE endpoint: http://$(HTTP_HOST):$(HTTP_PORT)/sse"
 	@echo "HTTP endpoint: http://$(HTTP_HOST):$(HTTP_PORT)/"
-	$(PYTHON) -m mcpgateway.translate --stdio "$(PYTHON) -m docx_server.server_fastmcp" --host $(HTTP_HOST) --port $(HTTP_PORT) --expose-sse
+	$(PYTHON) -m mcpgateway.translate --stdio "$(PYTHON) -m granite_vision_server.server_fastmcp" --host $(HTTP_HOST) --port $(HTTP_PORT) --expose-sse
 
 test-http: ## Basic HTTP checks
 	curl -s http://$(HTTP_HOST):$(HTTP_PORT)/ | head -20 || true
@@ -63,7 +63,7 @@ test-http: ## Basic HTTP checks
 
 example-create: ## Example: Create document
 	@echo "Creating example document..."
-	@$(PYTHON) -c "from docx_server.server_fastmcp import doc_ops; \
+	@$(PYTHON) -c "from granite_vision_server.server_fastmcp import doc_ops; \
 	result = doc_ops.create_document('/tmp/test_doc.docx', 'Test Document', 'Test Author'); \
 	import json; print(json.dumps(result, indent=2))"
 

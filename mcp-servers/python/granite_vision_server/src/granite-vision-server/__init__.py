@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Location: ./mcp-servers/python/docx_server/src/docx_server/__init__.py
+"""Location: ./mcp-servers/python/granite_vision_server/src/granite_vision_server/__init__.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
-Authors: Mihai Criveti
+Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed Kazmi
 
 DOCX MCP Server - Microsoft Word document operations.
 """

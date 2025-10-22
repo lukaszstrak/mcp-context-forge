@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
-"""Location: ./mcp-servers/python/docx_server/tests/test_server.py
+"""Location: ./mcp-servers/python/granite_vision_server/tests/test_server.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
-Authors: Mihai Criveti
+Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed Kazmi
 
 Tests for DOCX MCP Server (FastMCP).
 """
@@ -10,7 +10,7 @@ Tests for DOCX MCP Server (FastMCP).
 import tempfile
 from pathlib import Path
 
-from docx_server.server_fastmcp import doc_ops
+from granite_vision_server.server_fastmcp import doc_ops
 
 
 def test_create_document():
