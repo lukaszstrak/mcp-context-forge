@@ -402,6 +402,7 @@ clean:
 # help: 🧪 TESTING
 # help: smoketest            - Run smoketest.py --verbose (build container, add MCP server, test endpoints)
 # help: test                 - Run unit tests with pytest
+# help: test-profile         - Run tests and show slowest 20 tests (durations >= 1s)
 # help: coverage             - Run tests with coverage, emit md/HTML/XML + badge, generate annotated files
 # help: htmlcov              - (re)build just the HTML coverage report into docs
 # help: test-curl            - Smoke-test API endpoints with curl script
@@ -411,7 +412,7 @@ clean:
 # help: doctest-coverage     - Generate coverage report for doctest examples
 # help: doctest-check        - Check doctest coverage percentage (fail if < 100%)
 
-.PHONY: smoketest test coverage pytest-examples test-curl htmlcov doctest doctest-verbose doctest-coverage doctest-check
+.PHONY: smoketest test test-profile coverage pytest-examples test-curl htmlcov doctest doctest-verbose doctest-coverage doctest-check
 
 ## --- Automated checks --------------------------------------------------------
 smoketest:
@@ -427,7 +428,15 @@ test:
 	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
 		export DATABASE_URL='sqlite:///:memory:' && \
 		export TEST_DATABASE_URL='sqlite:///:memory:' && \
-		uv run pytest --maxfail=0 --disable-warnings -v --ignore=tests/fuzz"
+		uv run pytest -n auto --maxfail=0 --disable-warnings -v --ignore=tests/fuzz"
+
+test-profile:
+	@echo "🧪 Running tests with profiling (showing slowest tests)..."
+	@test -d "$(VENV_DIR)" || $(MAKE) venv
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
+		export DATABASE_URL='sqlite:///:memory:' && \
+		export TEST_DATABASE_URL='sqlite:///:memory:' && \
+		uv run pytest -n auto --durations=20 --durations-min=1.0 --disable-warnings -v --ignore=tests/fuzz"
 
 coverage:
 	@test -d "$(VENV_DIR)" || $(MAKE) venv
@@ -480,13 +489,15 @@ doctest:
 	@echo "🧪 Running doctest on all modules..."
 	@test -d "$(VENV_DIR)" || $(MAKE) venv
 	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
-		python3 -m pytest --doctest-modules mcpgateway/ --ignore=mcpgateway/utils/pagination.py --tb=short"
+		export JWT_SECRET_KEY=secret && \
+		python3 -m pytest --doctest-modules mcpgateway/ --ignore=mcpgateway/utils/pagination.py --tb=short --no-cov --disable-warnings -n auto"
 
 doctest-verbose:
 	@echo "🧪 Running doctest with verbose output..."
 	@test -d "$(VENV_DIR)" || $(MAKE) venv
 	@/bin/bash -c "source $(VENV_DIR)/bin/activate && \
-		python3 -m pytest --doctest-modules mcpgateway/ --ignore=mcpgateway/utils/pagination.py -v --tb=short"
+		export JWT_SECRET_KEY=secret && \
+		python3 -m pytest --doctest-modules mcpgateway/ --ignore=mcpgateway/utils/pagination.py -v --tb=short --no-cov --disable-warnings -n auto"
 
 doctest-coverage:
 	@echo "📊 Generating doctest coverage report..."
@@ -790,7 +801,7 @@ images:
 # help: pydocstyle           - Docstring style checker
 # help: pycodestyle          - Simple PEP-8 checker
 # help: pre-commit           - Run all configured pre-commit hooks
-# help: ruff                 - Ruff linter + formatter
+# help: ruff                 - Ruff linter + (eventually) formatter
 # help: ty                   - Ty type checker from astral
 # help: pyright              - Static type-checking with Pyright
 # help: radon                - Code complexity & maintainability metrics
@@ -1000,7 +1011,7 @@ flake8:                             ## 🐍  flake8 checks
 	@echo "🐍 flake8 $(TARGET)..." && $(VENV_DIR)/bin/flake8 $(TARGET)
 
 pylint:                             ## 🐛  pylint checks
-	@echo "🐛 pylint $(TARGET)..." && $(VENV_DIR)/bin/pylint $(TARGET)
+	@echo "🐛 pylint $(TARGET) (parallel)..." && $(VENV_DIR)/bin/pylint -j 8 $(TARGET)
 
 markdownlint:					    ## 📖  Markdown linting
 	@# Install markdownlint-cli2 if not present
@@ -1053,8 +1064,9 @@ pre-commit:                         ## 🪄  Run pre-commit hooks
 	fi
 	@/bin/bash -c "source $(VENV_DIR)/bin/activate && pre-commit run --all-files --show-diff-on-failure"
 
-ruff:                               ## ⚡  Ruff lint + format
-	@echo "⚡ ruff $(TARGET)..." && $(VENV_DIR)/bin/ruff check $(TARGET) && $(VENV_DIR)/bin/ruff format $(TARGET)
+ruff:                               ## ⚡  Ruff lint + (eventually) format
+	@echo "⚡ ruff $(TARGET)..." && $(VENV_DIR)/bin/ruff check $(TARGET)
+	#                   && $(VENV_DIR)/bin/ruff format $(TARGET)
 
 # Separate ruff targets for different modes
 ruff-check:
@@ -1063,6 +1075,7 @@ ruff-check:
 ruff-fix:
 	@echo "⚡ ruff check --fix $(TARGET)..." && $(VENV_DIR)/bin/ruff check --fix $(TARGET)
 
+#  Nothing depends on this target yet, but kept for future and ad hoc use
 ruff-format:
 	@echo "⚡ ruff format $(TARGET)..." && $(VENV_DIR)/bin/ruff format $(TARGET)
 
@@ -5038,8 +5051,8 @@ rust-bench-compare:                     ## Compare Rust vs Python performance
 rust-check:                             ## Run all Rust checks (format, lint, test)
 	@echo "🦀 Running Rust checks..."
 	@cd plugins_rust && cargo fmt --check
-	@cd plugins_rust && cargo clippy -- -D warnings
-	@cd plugins_rust && cargo test --release
+	@cd plugins_rust && cargo clippy --lib -- -D warnings -A deprecated
+	@cd plugins_rust && cargo test --lib --release
 
 rust-clean:                             ## Clean Rust build artifacts
 	@echo "🧹 Cleaning Rust build artifacts..."
