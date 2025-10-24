@@ -2,10 +2,6 @@
 
 .PHONY: help install dev-install format lint test dev mcp-info serve-http serve-sse test-http example-create clean
 
-
-# Virtual-environment variables
-VENV_DIR ?= .venv
-
 PYTHON ?= python3
 HTTP_PORT ?= 9004
 HTTP_HOST ?= localhost
@@ -20,22 +16,11 @@ help: ## Show help
 	@echo "Available Commands:"
 	@awk 'BEGIN {FS=":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-.PHONY: venv
-venv:
-	@rm -Rf "$(VENV_DIR)"
-	@test -d "$(VENV_DIR)" || mkdir -p "$(VENV_DIR)"
-	@python3 -m venv "$(VENV_DIR)"
-	@/bin/bash -c "source $(VENV_DIR)/bin/activate && python3 -m pip install --upgrade pip setuptools pdm"
-	# Eventually, we want to transition to using uv/uvx exclusively, at which point we will only need
-	# a virtual environment if the user has not installed uv into their account.
-	@/bin/bash -c "type uv || ( source $(VENV_DIR)/bin/activate && python3 -m pip install --upgrade uv )"
-	@echo -e "✅  Virtual env created.\n💡  Enter it with:\n    . $(VENV_DIR)/bin/activate\n"
+install: ## Install in editable mode
+	$(PYTHON) -m pip install -e .
 
-install: venv
-	@/bin/bash -c "source $(VENV_DIR)/bin/activate && uv pip install -e ."
-
-dev-install: venv
-	@/bin/bash -c "source $(VENV_DIR)/bin/activate && uv pip install -e .[dev]"
+dev-install: ## Install with dev extras
+	$(PYTHON) -m pip install -e ".[dev]"
 
 format: ## Format (black + ruff --fix)
 	black . && ruff --fix .
@@ -46,15 +31,15 @@ lint: ## Lint (ruff, mypy)
 test: ## Run tests
 	pytest -v --cov=granite_vision_server --cov-report=term-missing
 
-run: ## Run FastMCP server (stdio)
-	@echo "Starting Granite Vision MCP Server"
-	@/bin/bash -c "source $(VENV_DIR)/bin/activate && $(PYTHON) -m granite_vision_server.server"	
+dev: ## Run FastMCP server (stdio)
+	@echo "Starting DOCX FastMCP server..."
+	$(PYTHON) -m granite_vision_server.server_fastmcp
 
 mcp-info: ## Show MCP client config
 	@echo "==================== MCP CLIENT CONFIGURATION ===================="
 	@echo ""
 	@echo "FastMCP Server:"
-	@echo '{"command": "python", "args": ["-m", "granite_vision_server.server"], "cwd": "'$(PWD)'"}'
+	@echo '{"command": "python", "args": ["-m", "granite_vision_server.server_fastmcp"], "cwd": "'$(PWD)'"}'
 	@echo ""
 	@echo "=================================================================="
 
@@ -62,13 +47,13 @@ serve-http: ## Run with native FastMCP HTTP
 	@echo "Starting FastMCP server with native HTTP support..."
 	@echo "HTTP endpoint: http://$(HTTP_HOST):$(HTTP_PORT)/mcp/"
 	@echo "API docs: http://$(HTTP_HOST):$(HTTP_PORT)/docs"
-	$(PYTHON) -m granite_vision_server.server --transport http --host $(HTTP_HOST) --port $(HTTP_PORT)
+	$(PYTHON) -m granite_vision_server.server_fastmcp --transport http --host $(HTTP_HOST) --port $(HTTP_PORT)
 
 serve-sse: ## Run with mcpgateway.translate (SSE bridge)
 	@echo "Starting with translate SSE bridge..."
 	@echo "SSE endpoint: http://$(HTTP_HOST):$(HTTP_PORT)/sse"
 	@echo "HTTP endpoint: http://$(HTTP_HOST):$(HTTP_PORT)/"
-	$(PYTHON) -m mcpgateway.translate --stdio "$(PYTHON) -m granite_vision_server.server" --host $(HTTP_HOST) --port $(HTTP_PORT) --expose-sse
+	$(PYTHON) -m mcpgateway.translate --stdio "$(PYTHON) -m granite_vision_server.server_fastmcp" --host $(HTTP_HOST) --port $(HTTP_PORT) --expose-sse
 
 test-http: ## Basic HTTP checks
 	curl -s http://$(HTTP_HOST):$(HTTP_PORT)/ | head -20 || true
@@ -78,7 +63,7 @@ test-http: ## Basic HTTP checks
 
 example-create: ## Example: Create document
 	@echo "Creating example document..."
-	@$(PYTHON) -c "from granite_vision_server.server import doc_ops; \
+	@$(PYTHON) -c "from granite_vision_server.server_fastmcp import doc_ops; \
 	result = doc_ops.create_document('/tmp/test_doc.docx', 'Test Document', 'Test Author'); \
 	import json; print(json.dumps(result, indent=2))"
 

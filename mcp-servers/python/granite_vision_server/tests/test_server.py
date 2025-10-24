@@ -10,7 +10,7 @@ Tests for DOCX MCP Server (FastMCP).
 import tempfile
 from pathlib import Path
 
-from granite_vision_server.server import doc_ops
+from granite_vision_server.server_fastmcp import doc_ops
 
 
 def test_create_document():
