@@ -12,7 +12,7 @@ Create a comprehensive MCP Server for IBM Granite Vision Models supporting docum
 
 General image analysis and understanding
 
-```
+```python
 @dataclass
 class ImageAnalysisRequest:
   image_data: str  # base64, file path, or URL
@@ -28,7 +28,7 @@ class ImageAnalysisRequest:
 
 Document understanding and content extraction
 
-```
+```python
 @dataclass
 class DocumentExtractionRequest:
     document_data: str  # PDF, image, or multi-page document
@@ -45,7 +45,7 @@ class DocumentExtractionRequest:
 
 Answer questions about images and documents
 
-```
+```python
 @dataclass
 class VQARequest:
     image_data: str
@@ -61,7 +61,7 @@ class VQARequest:
 
 Optical Character Recognition with advanced features
 
-```
+```python
 @dataclass
 class OCRRequest:
     image_data: str
@@ -79,7 +79,7 @@ class OCRRequest:
 
 Chart and graph analysis and data extraction
 
-```
+```python
 @dataclass
 class ChartAnalysisRequest:
     image_data: str
@@ -96,7 +96,7 @@ class ChartAnalysisRequest:
 
 Table detection, extraction, and structure analysis
 
-```
+```python
 @dataclass
 class TableProcessingRequest:
     image_data: str
@@ -113,8 +113,7 @@ class TableProcessingRequest:
 
 Interactive multi-modal conversation
 
-
-```
+```python
 @dataclass
 class MultiModalChatRequest:
     messages: List[Dict[str, Any]]  # Text and image messages
@@ -130,8 +129,7 @@ class MultiModalChatRequest:
 
 Efficient batch processing of multiple images
 
-
-```
+```python
 @dataclass
 class BatchImageRequest:
     images: List[str]  # Multiple image data sources
