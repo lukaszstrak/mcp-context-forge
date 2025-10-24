@@ -2,8 +2,11 @@
 
 .PHONY: help install dev-install format lint test dev mcp-info serve-http serve-sse test-http example-create clean
 
+
+# Virtual-environment variables
+VENV_DIR ?= .venv
+
 PYTHON ?= python3
-PIP ?= $(PYTHON) -m pip
 HTTP_PORT ?= 9004
 HTTP_HOST ?= localhost
 
@@ -17,11 +20,22 @@ help: ## Show help
 	@echo "Available Commands:"
 	@awk 'BEGIN {FS=":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-install: ## Install in editable mode
-	$(PIP) install -e .
+.PHONY: venv
+venv:
+	@rm -Rf "$(VENV_DIR)"
+	@test -d "$(VENV_DIR)" || mkdir -p "$(VENV_DIR)"
+	@python3 -m venv "$(VENV_DIR)"
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && python3 -m pip install --upgrade pip setuptools pdm"
+	# Eventually, we want to transition to using uv/uvx exclusively, at which point we will only need
+	# a virtual environment if the user has not installed uv into their account.
+	@/bin/bash -c "type uv || ( source $(VENV_DIR)/bin/activate && python3 -m pip install --upgrade uv )"
+	@echo -e "✅  Virtual env created.\n💡  Enter it with:\n    . $(VENV_DIR)/bin/activate\n"
 
-dev-install: ## Install with dev extras
-	$(PIP) install -e ".[dev]"
+install: venv
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && uv pip install -e ."
+
+dev-install: venv
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && uv pip install -e .[dev]"
 
 format: ## Format (black + ruff --fix)
 	black . && ruff --fix .
@@ -32,9 +46,9 @@ lint: ## Lint (ruff, mypy)
 test: ## Run tests
 	pytest -v --cov=granite_vision_server --cov-report=term-missing
 
-dev: ## Run FastMCP server (stdio)
-	@echo "Starting DOCX FastMCP server..."
-	$(PYTHON) -m granite_vision_server.server
+run: ## Run FastMCP server (stdio)
+	@echo "Starting Granite Vision MCP Server"
+	@/bin/bash -c "source $(VENV_DIR)/bin/activate && $(PYTHON) -m granite_vision_server.server"	
 
 mcp-info: ## Show MCP client config
 	@echo "==================== MCP CLIENT CONFIGURATION ===================="
