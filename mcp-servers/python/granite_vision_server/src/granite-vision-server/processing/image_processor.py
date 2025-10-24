@@ -7,25 +7,20 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 
 Granite Vision MCP Server - FastMCP Implementation
 """
-
-
 from __future__ import annotations
-import json
-from typing import Dict, Tuple
 
-from granite_vision_models import (
+from ..models.granite_vision_models import (
     resolve_model_for_provider,
-    build_prompts,
-    SUPPORTED_ANALYSIS_TYPES,
+    build_prompts
 )
-from ollama_vision import OllamaVisionClient
-from image_utils import ensure_base64
-from format_converters import normalize_response
-from validation import validate_request
-from image_analysis import ImageAnalysisRequest
+from ..providers.ollama_vision import OllamaVisionClient
+from ..utils.image_utils import ensure_base64
+from ..utils.format_converters import normalize_response
+from ..utils.validations import validate_request
+from ..tools.image_analysis import ImageAnalysisRequest
 
 
-async def process_image_analysis(req: ImageAnalysisRequest) -> Dict:
+async def process_image_analysis(req: ImageAnalysisRequest):
     """
     Orchestrates: validation -> prompt building -> provider call -> normalization.
     Returns a provider-agnostic normalized JSON dict.

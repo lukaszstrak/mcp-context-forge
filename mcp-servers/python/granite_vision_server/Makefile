@@ -3,11 +3,12 @@
 .PHONY: help install dev-install format lint test dev mcp-info serve-http serve-sse test-http example-create clean
 
 PYTHON ?= python3
+PIP ?= $(PYTHON) -m pip
 HTTP_PORT ?= 9004
 HTTP_HOST ?= localhost
 
 help: ## Show help
-	@echo "DOCX MCP Server - Create and edit Microsoft Word documents"
+	@echo "Granite Vision MCP Server - FastMCP Implementation"
 	@echo ""
 	@echo "Quick Start:"
 	@echo "  make install          Install FastMCP server"
@@ -17,10 +18,10 @@ help: ## Show help
 	@awk 'BEGIN {FS=":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 install: ## Install in editable mode
-	$(PYTHON) -m pip install -e .
+	$(PIP) install -e .
 
 dev-install: ## Install with dev extras
-	$(PYTHON) -m pip install -e ".[dev]"
+	$(PIP) install -e ".[dev]"
 
 format: ## Format (black + ruff --fix)
 	black . && ruff --fix .

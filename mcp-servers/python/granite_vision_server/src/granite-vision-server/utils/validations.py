@@ -9,8 +9,8 @@ Granite Vision MCP Server - FastMCP Implementation
 """
 
 from __future__ import annotations
-from .processing.image_analysis import ImageAnalysisRequest
-from granite_vision_models import SUPPORTED_ANALYSIS_TYPES
+from ..tools.image_analysis import ImageAnalysisRequest
+from ..models.granite_vision_models import SUPPORTED_ANALYSIS_TYPES
 
 SUPPORTED_PROVIDERS = {"ollama"}
 
@@ -23,9 +23,3 @@ def validate_request(req: ImageAnalysisRequest) -> None:
             f"Unsupported analysis_type: {req.analysis_type}. "
             f"Choose from: {sorted(SUPPORTED_ANALYSIS_TYPES)}"
         )
-    if not isinstance(req.max_description_length, int) or req.max_description_length <= 0:
-        raise ValueError("max_description_length must be a positive integer")
-    if not isinstance(req.include_confidence, bool):
-        raise ValueError("include_confidence must be a boolean")
-    if not isinstance(req.language, str) or not req.language:
-        raise ValueError("language must be a non-empty string (BCP-47 code)")

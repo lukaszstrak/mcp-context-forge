@@ -10,9 +10,8 @@ Granite Vision MCP Server - FastMCP Implementation
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict
 
-from image_processor import process_image_analysis
+from ..processing.image_processor import process_image_analysis
 
 
 @dataclass
@@ -26,6 +25,6 @@ class ImageAnalysisRequest:
     language: str = "en"
 
 
-async def analyze_image(req: ImageAnalysisRequest) -> Dict:
+async def analyze_image(req: ImageAnalysisRequest):
     """Entry point used by the MCP tool handler."""
     return await process_image_analysis(req)

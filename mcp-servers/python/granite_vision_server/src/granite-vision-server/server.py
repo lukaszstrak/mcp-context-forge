@@ -14,7 +14,7 @@ from typing import Any
 from fastmcp import FastMCP
 from pydantic import Field
 
-from .image_analysis import ImageAnalysisRequest, analyze_image
+from .tools.image_analysis import ImageAnalysisRequest, analyze_image as tools_analyze_image
 
 # Configure logging to stderr to avoid MCP protocol interference
 logging.basicConfig(
@@ -53,8 +53,7 @@ async def analyze_image(
     )
 
 
-    result = await analyze_image(req)
-    return CallToolResult(content=[TextContent(type="text", text=json.dumps(result, ensure_ascii=False))])
+    return await tools_analyze_image(req)    
 
 def main():
     """Main entry point for the FastMCP server."""
