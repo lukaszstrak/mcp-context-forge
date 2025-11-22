@@ -4,6 +4,74 @@
 
 Create a comprehensive MCP Server for IBM Granite Vision Models supporting document understanding, image analysis, OCR, visual question answering, and multi-modal processing with enterprise deployment capabilities.
 
+## Prerequisites
+
+### Install Ollama
+
+Download and install Ollama from [ollama.com](https://ollama.com):
+
+```bash
+# macOS/Linux
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Windows: Download installer from ollama.com
+```
+
+### Pull IBM Granite 3.3 Vision Model
+
+```bash
+ollama pull granite3.3-vision:2b
+```
+
+Verify the model is available:
+
+```bash
+ollama list | grep granite
+# Should show: granite3.3-vision:2b
+```
+
+### Verify Ollama is Running
+
+```bash
+# Test Ollama server
+curl http://localhost:11434/api/tags
+
+# Should return JSON with model list
+```
+
+## Quick Start
+
+```bash
+# Clone or navigate to the project
+cd granite_vision_server
+
+# Install the package
+pip install -e .
+
+# Or install with development dependencies
+pip install -e ".[dev]"
+```
+
+### Using uv (recommended)
+
+```bash
+# Install uv if not already installed
+pip install uv
+
+# Install dependencies
+uv pip install -e .
+```
+
+## Quick Test
+
+```bash
+# Test the server
+python -m granite_vision_server.server_fastmcp --help
+
+# List available tools
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | python -m granite_vision_server.server_fastmcp
+```
+
 ## Configuration
 
 ## Tools
@@ -168,6 +236,10 @@ python -m granite_vision_server.server
 Expose the server over HTTP for REST API access:
 
 ```bash
+# Start with HTTP transport
+python -m granite_vision_server.server_fastmcp --transport http --port 9004
+
+# Or using make
 make serve-http
 ```
 
@@ -176,9 +248,9 @@ make serve-http
 ```json
 {
   "mcpServers": {
-    "docx-server": {
+    "granite-vision": {
       "command": "python",
-      "args": ["-m", "granite_vision_server.server"],
+      "args": ["-m", "granite_vision_server.server_fastmcp"],
       "cwd": "/path/to/granite_vision_server"
     }
   }
@@ -189,10 +261,10 @@ make serve-http
 
 ```bash
 # Test tool listing
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | python -m granite_vision_server.server
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | python -m granite_vision_server.server_fastmcp
 
-# Create a document
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"create_document","arguments":{"file_path":"test.docx","title":"Test Document"}}}' | python -m granite_vision_server.server
+# Analyze an image
+echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"analyze_image","arguments":{"image_data":"<BASE64_IMAGE_DATA>","analysis_type":"general"}}}' | python -m granite_vision_server.server_fastmcp
 ```
 
 ## FastMCP Advantages
@@ -207,19 +279,52 @@ The FastMCP implementation provides:
 
 ## Development
 
+### Code Quality
+
 ```bash
 # Format code
 make format
 
-# Run tests
-make test
-
 # Lint code
 make lint
+
+# Type checking
+mypy src/granite_vision_server
+```
+
+### Running Tests
+
+```bash
+# Run all tests
+make test
+
+# Run with coverage
+pytest --cov=granite_vision_server --cov-report=html
+
+# Run specific test file
+pytest tests/test_server.py -v
+```
+
+### Import Errors
+
+```bash
+# Reinstall dependencies
+pip install -e .
+
+# Or use uv
+uv pip install -e .
+
+# Verify installations
+pip list | grep -E "ollama|fastmcp|Pillow"
 ```
 
 ## Requirements
 
-- Python 3.11+
-- python-docx library for document manipulation
-- MCP framework for protocol implementation
+- **Python**: 3.11+
+- **Ollama**: Latest version with granite3.3-vision:2b model
+- **Dependencies**:
+  - `fastmcp>=2.11.3` - MCP protocol implementation
+  - `ollama>=0.4.0` - Official Ollama Python SDK
+  - `Pillow>=10.0.0` - Image processing
+  - `requests>=2.31.0` - HTTP client for image URLs
+  - `pydantic>=2.5.0` - Data validation
