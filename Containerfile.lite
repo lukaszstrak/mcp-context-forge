@@ -76,13 +76,13 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
 ARG PYTHON_VERSION
 ARG ROOTFS_PATH
-ARG TARGETPLATFORM
+ARG TARGETPLATFORM=linux/amd64
 ARG GRPC_PYTHON_BUILD_SYSTEM_OPENSSL='False'
 
 # ----------------------------------------------------------------------------
 # 1) Patch the OS
 # 2) Install Python + headers for building wheels
-# 3) Install binutils for strip command
+# 3) Install binutils for strip command and curl for downloading CDN assets
 # 4) Register python3 alternative
 # 5) Clean caches to reduce layer size
 # ----------------------------------------------------------------------------
@@ -92,7 +92,7 @@ RUN set -euo pipefail \
     && dnf install -y \
          python${PYTHON_VERSION} \
          python${PYTHON_VERSION}-devel \
-         binutils openssl-devel gcc postgresql-devel gcc-c++ \
+         binutils openssl-devel gcc postgresql-devel gcc-c++ curl \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1 \
     && dnf clean all
 
@@ -164,6 +164,15 @@ COPY mcp-catalog.yml /app/
 
 # Optional: Copy run.sh if it's needed in production
 COPY run.sh /app/
+
+# ----------------------------------------------------------------------------
+# Download CDN assets for airgapped deployment
+# This downloads external CSS/JS dependencies during build
+# ----------------------------------------------------------------------------
+COPY scripts/download-cdn-assets.sh /tmp/download-cdn-assets.sh
+RUN chmod +x /tmp/download-cdn-assets.sh \
+    && /tmp/download-cdn-assets.sh \
+    && rm /tmp/download-cdn-assets.sh
 
 # ----------------------------------------------------------------------------
 # Ensure executable permissions for scripts
@@ -294,7 +303,7 @@ LABEL maintainer="Mihai Criveti" \
       org.opencontainers.image.title="mcp/mcpgateway" \
       org.opencontainers.image.description="MCP Gateway: An enterprise-ready Model Context Protocol Gateway" \
       org.opencontainers.image.licenses="Apache-2.0" \
-      org.opencontainers.image.version="0.8.0"
+      org.opencontainers.image.version="0.9.0"
 
 # ----------------------------------------------------------------------------
 # Copy the entire prepared root filesystem from the builder stage

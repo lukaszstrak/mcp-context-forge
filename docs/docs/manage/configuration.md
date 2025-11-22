@@ -224,6 +224,7 @@ AUTH_ENCRYPTION_SECRET=$(openssl rand -hex 32)
 # Core Features
 MCPGATEWAY_UI_ENABLED=true
 MCPGATEWAY_ADMIN_API_ENABLED=true
+MCPGATEWAY_UI_AIRGAPPED=false          # Use local CDN assets for airgapped deployments
 MCPGATEWAY_BULK_IMPORT_ENABLED=true
 MCPGATEWAY_BULK_IMPORT_MAX_TOOLS=200
 
@@ -238,6 +239,33 @@ MCPGATEWAY_A2A_METRICS_ENABLED=true
 FEDERATION_ENABLED=true
 FEDERATION_DISCOVERY=true
 FEDERATION_PEERS=["https://gateway-1.internal", "https://gateway-2.internal"]
+```
+
+### Airgapped Deployments
+
+For environments without internet access, the Admin UI can be configured to use local CDN assets instead of external CDNs.
+
+```bash
+# Enable airgapped mode (loads CSS/JS from local files)
+MCPGATEWAY_UI_AIRGAPPED=true
+```
+
+!!! info "Airgapped Mode Features"
+    When `MCPGATEWAY_UI_AIRGAPPED=true`:
+
+    - All CSS and JavaScript libraries are loaded from local files
+    - No external CDN connections required (Tailwind, HTMX, CodeMirror, Alpine.js, Chart.js)
+    - Assets are automatically downloaded during container build
+    - Total asset size: ~932KB
+    - Full UI functionality maintained
+
+!!! warning "Container Build Required"
+    Airgapped mode requires building with `Containerfile.lite` which automatically downloads all CDN assets during the build process. The assets are not included in the Git repository.
+
+**Container Build Example:**
+```bash
+docker build -f Containerfile.lite -t mcpgateway:airgapped .
+docker run -e MCPGATEWAY_UI_AIRGAPPED=true -p 4444:4444 mcpgateway:airgapped
 ```
 
 ### Caching Configuration
@@ -563,7 +591,7 @@ REQUIRE_TOKEN_EXPIRATION=true
 TOKEN_EXPIRY=60
 ```
 
-### Observability Integration
+### OpenTelemetry Observability
 
 ```bash
 # OpenTelemetry (Phoenix, Jaeger, etc.)
@@ -573,6 +601,39 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:4317
 OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 OTEL_SERVICE_NAME=mcp-gateway
 ```
+
+### Internal Observability System
+
+MCP Gateway includes a built-in observability system that stores traces and metrics in the database, providing performance analytics and error tracking through the Admin UI.
+
+```bash
+# Enable internal observability (database-backed tracing)
+OBSERVABILITY_ENABLED=false
+
+# Automatically trace HTTP requests
+OBSERVABILITY_TRACE_HTTP_REQUESTS=true
+
+# Trace retention (days)
+OBSERVABILITY_TRACE_RETENTION_DAYS=7
+
+# Maximum traces to retain (prevents unbounded growth)
+OBSERVABILITY_MAX_TRACES=100000
+
+# Trace sampling rate (0.0-1.0)
+# 1.0 = trace everything, 0.1 = trace 10% of requests
+OBSERVABILITY_SAMPLE_RATE=1.0
+
+# Paths to exclude from tracing (comma-separated regex patterns)
+OBSERVABILITY_EXCLUDE_PATHS=/health,/healthz,/ready,/metrics,/static/.*
+
+# Enable metrics collection
+OBSERVABILITY_METRICS_ENABLED=true
+
+# Enable event logging within spans
+OBSERVABILITY_EVENTS_ENABLED=true
+```
+
+See the [Internal Observability Guide](observability/internal-observability.md) for detailed usage instructions including Admin UI dashboards, performance metrics, and trace analysis.
 
 ---
 
