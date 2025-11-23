@@ -24,7 +24,7 @@ import pytest
 
 # First-Party
 from mcpgateway.config import settings
-from mcpgateway.models import InitializeResult, ResourceContent, ServerCapabilities
+from mcpgateway.common.models import InitializeResult, ResourceContent, ServerCapabilities
 from mcpgateway.schemas import (
     PromptRead,
     ResourceRead,
@@ -147,7 +147,6 @@ MOCK_GATEWAY_READ = {
     "url": "http://example.com",
     "description": "A test gateway",
     "transport": "SSE",
-    "auth_type": "none",
     "created_at": "2023-01-01T00:00:00+00:00",
     "updated_at": "2023-01-01T00:00:00+00:00",
     "enabled": True,
@@ -947,13 +946,29 @@ class TestGatewayEndpoints:
         mock_update.assert_called_once()
 
     @patch("mcpgateway.main.gateway_service.delete_gateway")
-    def test_delete_gateway_endpoint(self, mock_delete, test_client, auth_headers):
-        """Test deleting a gateway."""
+    @patch("mcpgateway.main.gateway_service.get_gateway")
+    def test_delete_gateway_endpoint_no_resources(self, mock_get, mock_delete, test_client, auth_headers):
+        """Test deleting a gateway that doesn't have resources."""
         mock_delete.return_value = None
+        mock_get.return_value.capabilities = {}
         response = test_client.delete("/gateways/1", headers=auth_headers)
         assert response.status_code == 200
         assert response.json()["status"] == "success"
         mock_delete.assert_called_once()
+
+    @patch("mcpgateway.main.gateway_service.delete_gateway")
+    @patch("mcpgateway.main.gateway_service.get_gateway")
+    @patch("mcpgateway.main.invalidate_resource_cache")
+    def test_delete_gateway_endpoint_with_resources(self, mock_invalidate_cache, mock_get, mock_delete, test_client, auth_headers):
+        """Test deleting a gateway that does have resources."""
+        mock_delete.return_value = None
+        mock_get.return_value = MagicMock()
+        mock_get.return_value.capabilities = {"resources": {"some": "thing"}}
+        response = test_client.delete("/gateways/1", headers=auth_headers)
+        assert response.status_code == 200
+        assert response.json()["status"] == "success"
+        mock_delete.assert_called_once()
+        mock_invalidate_cache.assert_called_once()
 
     @patch("mcpgateway.main.gateway_service.toggle_gateway_status")
     def test_toggle_gateway_status(self, mock_toggle, test_client, auth_headers):
@@ -1006,9 +1021,11 @@ class TestGatewayEndpoints:
         mock_update.assert_called_once()
 
     @patch("mcpgateway.main.gateway_service.delete_gateway")
-    def test_delete_gateway_endpoint(self, mock_delete, test_client, auth_headers):
+    @patch("mcpgateway.main.gateway_service.get_gateway")
+    def test_delete_gateway_endpoint(self, mock_get, mock_delete, test_client, auth_headers):
         """Test deleting a gateway."""
         mock_delete.return_value = None
+        mock_get.return_value.capabilities = {}
         response = test_client.delete("/gateways/1", headers=auth_headers)
         assert response.status_code == 200
         assert response.json()["status"] == "success"
@@ -1034,7 +1051,7 @@ class TestRootEndpoints:
     def test_list_roots_endpoint(self, mock_list, test_client, auth_headers):
         """Test listing all registered roots."""
         # First-Party
-        from mcpgateway.models import Root
+        from mcpgateway.common.models import Root
 
         mock_list.return_value = [Root(uri="file:///test", name="Test Root")]  # valid URI
         response = test_client.get("/roots/", headers=auth_headers)
@@ -1048,7 +1065,7 @@ class TestRootEndpoints:
     def test_add_root_endpoint(self, mock_add, test_client, auth_headers):
         """Test adding a new root directory."""
         # First-Party
-        from mcpgateway.models import Root
+        from mcpgateway.common.models import Root
 
         mock_add.return_value = Root(uri="file:///test", name="Test Root")  # valid URI
 
@@ -1220,7 +1237,7 @@ class TestRealtimeEndpoints:
         mock_transport.create_sse_response.return_value = MagicMock()
         mock_transport_class.return_value = mock_transport
 
-        response = test_client.get("/sse", headers=auth_headers)
+        test_client.get("/sse", headers=auth_headers)
 
         # Note: This test may need adjustment based on actual SSE implementation
         # The exact assertion will depend on how SSE responses are structured
@@ -1582,3 +1599,221 @@ def test_jsonpath_modifier_invalid_expressions(sample_people):
 
     with pytest.raises(HTTPException):
         jsonpath_modifier(sample_people, "$[*]", mappings={"bad": "$["})  # invalid mapping expr
+
+
+# ----------------------------------------------------- #
+# Plugin Exception Handler Tests                       #
+# ----------------------------------------------------- #
+class TestPluginExceptionHandlers:
+    """Tests for plugin exception handlers: PluginViolationError and PluginError."""
+
+    def test_plugin_violation_exception_handler_with_full_violation(self):
+        """Test plugin_violation_exception_handler with complete violation details."""
+        # Standard
+        import asyncio
+
+        # First-Party
+        from mcpgateway.main import plugin_violation_exception_handler
+        from mcpgateway.plugins.framework.errors import PluginViolationError
+        from mcpgateway.plugins.framework.models import PluginViolation
+
+        violation = PluginViolation(
+            reason="Invalid input",
+            description="The input contains prohibited content",
+            code="PROHIBITED_CONTENT",
+            details={"field": "message", "value": "sensitive_data"},
+        )
+        violation._plugin_name = "content_filter"
+        exc = PluginViolationError(message="Policy violation detected", violation=violation)
+
+        result = asyncio.run(plugin_violation_exception_handler(None, exc))
+
+        assert result.status_code == 200
+        content = json.loads(result.body.decode())
+        assert "error" in content
+        assert content["error"]["code"] == -32602
+        assert "Plugin Violation:" in content["error"]["message"]
+        assert "The input contains prohibited content" in content["error"]["message"]
+        assert content["error"]["data"]["description"] == "The input contains prohibited content"
+        assert content["error"]["data"]["details"] == {"field": "message", "value": "sensitive_data"}
+        assert content["error"]["data"]["plugin_error_code"] == "PROHIBITED_CONTENT"
+        assert content["error"]["data"]["plugin_name"] == "content_filter"
+
+    def test_plugin_violation_exception_handler_with_custom_mcp_error_code(self):
+        """Test plugin_violation_exception_handler with custom MCP error code."""
+        # Standard
+        import asyncio
+
+        # First-Party
+        from mcpgateway.main import plugin_violation_exception_handler
+        from mcpgateway.plugins.framework.errors import PluginViolationError
+        from mcpgateway.plugins.framework.models import PluginViolation
+
+        violation = PluginViolation(
+            reason="Rate limit exceeded",
+            description="Too many requests from this client",
+            code="RATE_LIMIT",
+            details={"requests": 100, "limit": 50},
+            mcp_error_code=-32000,  # Custom error code
+        )
+        violation._plugin_name = "rate_limiter"
+        exc = PluginViolationError(message="Rate limit violation", violation=violation)
+
+        result = asyncio.run(plugin_violation_exception_handler(None, exc))
+
+        assert result.status_code == 200
+        content = json.loads(result.body.decode())
+        assert content["error"]["code"] == -32000
+        assert "Too many requests from this client" in content["error"]["message"]
+        assert content["error"]["data"]["plugin_error_code"] == "RATE_LIMIT"
+        assert content["error"]["data"]["plugin_name"] == "rate_limiter"
+
+    def test_plugin_violation_exception_handler_with_minimal_violation(self):
+        """Test plugin_violation_exception_handler with minimal violation details."""
+        # Standard
+        import asyncio
+
+        # First-Party
+        from mcpgateway.main import plugin_violation_exception_handler
+        from mcpgateway.plugins.framework.errors import PluginViolationError
+        from mcpgateway.plugins.framework.models import PluginViolation
+
+        violation = PluginViolation(
+            reason="Violation occurred",
+            description="Minimal violation",
+            code="MIN_VIOLATION",
+            details={},
+        )
+        exc = PluginViolationError(message="Minimal violation", violation=violation)
+
+        result = asyncio.run(plugin_violation_exception_handler(None, exc))
+
+        assert result.status_code == 200
+        content = json.loads(result.body.decode())
+        assert content["error"]["code"] == -32602
+        assert "Minimal violation" in content["error"]["message"]
+        assert content["error"]["data"]["plugin_error_code"] == "MIN_VIOLATION"
+
+    def test_plugin_violation_exception_handler_without_violation_object(self):
+        """Test plugin_violation_exception_handler when violation object is None."""
+        # Standard
+        import asyncio
+
+        # First-Party
+        from mcpgateway.main import plugin_violation_exception_handler
+        from mcpgateway.plugins.framework.errors import PluginViolationError
+
+        exc = PluginViolationError(message="Generic plugin violation", violation=None)
+
+        result = asyncio.run(plugin_violation_exception_handler(None, exc))
+
+        assert result.status_code == 200
+        content = json.loads(result.body.decode())
+        assert content["error"]["code"] == -32602
+        assert "A plugin violation occurred" in content["error"]["message"]
+        assert content["error"]["data"] == {}
+
+    def test_plugin_exception_handler_with_full_error(self):
+        """Test plugin_exception_handler with complete error details."""
+        # Standard
+        import asyncio
+
+        # First-Party
+        from mcpgateway.main import plugin_exception_handler
+        from mcpgateway.plugins.framework.errors import PluginError
+        from mcpgateway.plugins.framework.models import PluginErrorModel
+
+        error = PluginErrorModel(
+            message="Plugin execution failed",
+            code="EXECUTION_ERROR",
+            plugin_name="data_processor",
+            details={"error_type": "timeout", "duration": 30},
+        )
+        exc = PluginError(error=error)
+
+        result = asyncio.run(plugin_exception_handler(None, exc))
+
+        assert result.status_code == 200
+        content = json.loads(result.body.decode())
+        assert "error" in content
+        assert content["error"]["code"] == -32603
+        assert "Plugin Error:" in content["error"]["message"]
+        assert "Plugin execution failed" in content["error"]["message"]
+        assert content["error"]["data"]["details"] == {"error_type": "timeout", "duration": 30}
+        assert content["error"]["data"]["plugin_error_code"] == "EXECUTION_ERROR"
+        assert content["error"]["data"]["plugin_name"] == "data_processor"
+
+    def test_plugin_exception_handler_with_custom_mcp_error_code(self):
+        """Test plugin_exception_handler with custom MCP error code."""
+        # Standard
+        import asyncio
+
+        # First-Party
+        from mcpgateway.main import plugin_exception_handler
+        from mcpgateway.plugins.framework.errors import PluginError
+        from mcpgateway.plugins.framework.models import PluginErrorModel
+
+        error = PluginErrorModel(
+            message="Custom error occurred",
+            code="CUSTOM_ERROR",
+            plugin_name="custom_plugin",
+            details={"context": "test"},
+            mcp_error_code=-32001,  # Custom MCP error code
+        )
+        exc = PluginError(error=error)
+
+        result = asyncio.run(plugin_exception_handler(None, exc))
+
+        assert result.status_code == 200
+        content = json.loads(result.body.decode())
+        assert content["error"]["code"] == -32001
+        assert "Custom error occurred" in content["error"]["message"]
+        assert content["error"]["data"]["plugin_error_code"] == "CUSTOM_ERROR"
+
+    def test_plugin_exception_handler_with_minimal_error(self):
+        """Test plugin_exception_handler with minimal error details."""
+        # Standard
+        import asyncio
+
+        # First-Party
+        from mcpgateway.main import plugin_exception_handler
+        from mcpgateway.plugins.framework.errors import PluginError
+        from mcpgateway.plugins.framework.models import PluginErrorModel
+
+        error = PluginErrorModel(message="Minimal error", plugin_name="minimal_plugin")
+        exc = PluginError(error=error)
+
+        result = asyncio.run(plugin_exception_handler(None, exc))
+
+        assert result.status_code == 200
+        content = json.loads(result.body.decode())
+        assert content["error"]["code"] == -32603
+        assert "Minimal error" in content["error"]["message"]
+        assert content["error"]["data"]["plugin_name"] == "minimal_plugin"
+
+    def test_plugin_exception_handler_with_empty_code(self):
+        """Test plugin_exception_handler when error has empty code field."""
+        # Standard
+        import asyncio
+
+        # First-Party
+        from mcpgateway.main import plugin_exception_handler
+        from mcpgateway.plugins.framework.errors import PluginError
+        from mcpgateway.plugins.framework.models import PluginErrorModel
+
+        error = PluginErrorModel(
+            message="Error without code",
+            code="",
+            plugin_name="test_plugin",
+            details={"info": "test"},
+        )
+        exc = PluginError(error=error)
+
+        result = asyncio.run(plugin_exception_handler(None, exc))
+
+        assert result.status_code == 200
+        content = json.loads(result.body.decode())
+        assert content["error"]["code"] == -32603
+        assert "Error without code" in content["error"]["message"]
+        # Empty code should not be included in data
+        assert "plugin_error_code" not in content["error"]["data"] or content["error"]["data"]["plugin_error_code"] == ""
