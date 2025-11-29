@@ -8,13 +8,17 @@ Granite Vision MCP Server - FastMCP Implementation
 
 """
 
+# Future
 from __future__ import annotations
+
+# Standard
 import base64
 import os
 import re
 from typing import Tuple
 
 try:
+    # Third-Party
     import requests  # type: ignore
 except Exception:  # pragma: no cover
     requests = None

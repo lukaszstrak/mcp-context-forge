@@ -6,8 +6,8 @@ Whether you're self-hosting, running in the cloud, or deploying to Kubernetes, t
 
 ---
 
-!!! tip "What's new in 0.8.0"
-    Version v0.8.0 includes multi‑tenancy: email authentication, teams, RBAC, and resource visibility (private/team/public).
+!!! tip "What's new in 0.9.0"
+    Version v0.9.0 includes multi‑tenancy: email authentication, teams, RBAC, and resource visibility (private/team/public).
 
     - See the [Migration Guide](https://github.com/IBM/mcp-context-forge/blob/main/MIGRATION-0.7.0.md) and [Changelog](https://github.com/IBM/mcp-context-forge/blob/main/CHANGELOG.md)
     - Quick enablement (excerpt): `EMAIL_AUTH_ENABLED=true`, `PLATFORM_ADMIN_EMAIL=...`, `AUTO_CREATE_PERSONAL_TEAMS=true`
@@ -41,7 +41,7 @@ Most operational settings (logging level, database pool size, auth mode) are con
 !!! info "MariaDB & MySQL Fully Supported"
     MCP Gateway now has **complete MariaDB/MySQL support** alongside SQLite and PostgreSQL:
 
-    - **36+ database tables** work perfectly with MariaDB 12.0+ and MySQL 8.4+
+    - **36+ database tables** work perfectly with MariaDB 10.6+ and MySQL 8.0+
     - All **VARCHAR length issues** resolved for MariaDB/MySQL compatibility
     - Connection string: `DATABASE_URL=mysql+pymysql://mysql:changeme@localhost:3306/mcp`
     - See [Configuration Reference](configuration.md) for complete setup instructions

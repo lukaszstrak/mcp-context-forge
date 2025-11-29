@@ -59,6 +59,8 @@ import sys
 from typing import Annotated, Any, ClassVar, Dict, List, Literal, NotRequired, Optional, Self, Set, TypedDict
 
 # Third-Party
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 from pydantic import Field, field_validator, HttpUrl, model_validator, PositiveInt, SecretStr, ValidationInfo
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
@@ -150,6 +152,7 @@ class Settings(BaseSettings):
     app_name: str = "MCP_Gateway"
     host: str = "127.0.0.1"
     port: PositiveInt = Field(default=4444, ge=1, le=65535)
+    client_mode: bool = False
     docs_allow_basic_auth: bool = False  # Allow basic auth for docs
     database_url: str = "sqlite:///./mcp.db"
 
@@ -288,6 +291,7 @@ class Settings(BaseSettings):
     email_auth_enabled: bool = Field(default=True, description="Enable email-based authentication")
     platform_admin_email: str = Field(default="admin@example.com", description="Platform administrator email address")
     platform_admin_password: SecretStr = Field(default=SecretStr("changeme"), description="Platform administrator password")
+    default_user_password: SecretStr = Field(default=SecretStr("changeme"), description="Default password for new users")  # nosec B105
     platform_admin_full_name: str = Field(default="Platform Administrator", description="Platform administrator full name")
 
     # Argon2id Password Hashing Configuration
@@ -317,6 +321,7 @@ class Settings(BaseSettings):
     # UI/Admin Feature Flags
     mcpgateway_ui_enabled: bool = False
     mcpgateway_admin_api_enabled: bool = False
+    mcpgateway_ui_airgapped: bool = Field(default=False, description="Use local CDN assets instead of external CDNs for airgapped deployments")
     mcpgateway_bulk_import_enabled: bool = True
     mcpgateway_bulk_import_max_tools: int = 200
     mcpgateway_bulk_import_rate_limit: int = 10
@@ -395,7 +400,7 @@ class Settings(BaseSettings):
     # Security validation thresholds
     min_secret_length: int = 32
     min_password_length: int = 12
-    require_strong_secrets: bool = False  # Default to False for backward compatibility, will be enforced in 0.8.0
+    require_strong_secrets: bool = False  # Default to False for backward compatibility, will be enforced in 1.0.0
 
     llmchat_enabled: bool = Field(default=False, description="Enable LLM Chat feature")
 
@@ -444,28 +449,30 @@ class Settings(BaseSettings):
             value = str(v)
 
         # Check for default/weak secrets
-        weak_secrets = ["my-test-key", "my-test-salt", "changeme", "secret", "password"]
-        if value.lower() in weak_secrets:
-            logger.warning(f"🔓 SECURITY WARNING - {field_name}: Default/weak secret detected! Please set a strong, unique value for production.")
+        if not info.data.get("client_mode"):
+            weak_secrets = ["my-test-key", "my-test-salt", "changeme", "secret", "password"]
+            if value.lower() in weak_secrets:
+                logger.warning(f"🔓 SECURITY WARNING - {field_name}: Default/weak secret detected! Please set a strong, unique value for production.")
 
-        # Check minimum length
-        if len(value) < 32:
-            logger.warning(f"⚠️  SECURITY WARNING - {field_name}: Secret should be at least 32 characters long. Current length: {len(value)}")
+            # Check minimum length
+            if len(value) < 32:
+                logger.warning(f"⚠️  SECURITY WARNING - {field_name}: Secret should be at least 32 characters long. Current length: {len(value)}")
 
-        # Basic entropy check (at least 10 unique characters)
-        if len(set(value)) < 10:
-            logger.warning(f"🔑 SECURITY WARNING - {field_name}: Secret has low entropy. Consider using a more random value.")
+            # Basic entropy check (at least 10 unique characters)
+            if len(set(value)) < 10:
+                logger.warning(f"🔑 SECURITY WARNING - {field_name}: Secret has low entropy. Consider using a more random value.")
 
         # Always return SecretStr to keep it secret-safe
         return v if isinstance(v, SecretStr) else SecretStr(value)
 
     @field_validator("basic_auth_password")
     @classmethod
-    def validate_admin_password(cls, v: str | SecretStr) -> SecretStr:
+    def validate_admin_password(cls, v: str | SecretStr, info: ValidationInfo) -> SecretStr:
         """Validate admin password meets security requirements.
 
         Args:
             v: The admin password value to validate.
+            info: ValidationInfo containing field data.
 
         Returns:
             SecretStr: The validated admin password value, wrapped as SecretStr.
@@ -476,35 +483,37 @@ class Settings(BaseSettings):
         else:
             value = v
 
-        if value == "changeme":  # nosec B105 - checking for default value
-            logger.warning("🔓 SECURITY WARNING: Default admin password detected! Please change the BASIC_AUTH_PASSWORD immediately.")
+        if not info.data.get("client_mode"):
+            if value == "changeme":  # nosec B105 - checking for default value
+                logger.warning("🔓 SECURITY WARNING: Default admin password detected! Please change the BASIC_AUTH_PASSWORD immediately.")
 
-        # Note: We can't access password_min_length here as it's not set yet during validation
-        # Using default value of 8 to match the field default
-        min_length = 8  # This matches the default in password_min_length field
-        if len(value) < min_length:
-            logger.warning(f"⚠️  SECURITY WARNING: Admin password should be at least {min_length} characters long. Current length: {len(value)}")
+            # Note: We can't access password_min_length here as it's not set yet during validation
+            # Using default value of 8 to match the field default
+            min_length = 8  # This matches the default in password_min_length field
+            if len(value) < min_length:
+                logger.warning(f"⚠️  SECURITY WARNING: Admin password should be at least {min_length} characters long. Current length: {len(value)}")
 
-        # Check password complexity
-        has_upper = any(c.isupper() for c in value)
-        has_lower = any(c.islower() for c in value)
-        has_digit = any(c.isdigit() for c in value)
-        has_special = bool(re.search(r'[!@#$%^&*(),.?":{}|<>]', value))
+            # Check password complexity
+            has_upper = any(c.isupper() for c in value)
+            has_lower = any(c.islower() for c in value)
+            has_digit = any(c.isdigit() for c in value)
+            has_special = bool(re.search(r'[!@#$%^&*(),.?":{}|<>]', value))
 
-        complexity_score = sum([has_upper, has_lower, has_digit, has_special])
-        if complexity_score < 3:
-            logger.warning("🔐 SECURITY WARNING: Admin password has low complexity. Should contain at least 3 of: uppercase, lowercase, digits, special characters")
+            complexity_score = sum([has_upper, has_lower, has_digit, has_special])
+            if complexity_score < 3:
+                logger.warning("🔐 SECURITY WARNING: Admin password has low complexity. Should contain at least 3 of: uppercase, lowercase, digits, special characters")
 
         # Always return SecretStr to keep it secret-safe
         return v if isinstance(v, SecretStr) else SecretStr(value)
 
     @field_validator("allowed_origins")
     @classmethod
-    def validate_cors_origins(cls, v: Any) -> set[str] | None:
+    def validate_cors_origins(cls, v: Any, info: ValidationInfo) -> set[str] | None:
         """Validate CORS allowed origins.
 
         Args:
             v: The set of allowed origins to validate.
+            info: ValidationInfo containing field data.
 
         Returns:
             set: The validated set of allowed origins.
@@ -518,35 +527,38 @@ class Settings(BaseSettings):
             raise ValueError("allowed_origins must be a set or list of strings")
 
         dangerous_origins = ["*", "null", ""]
-        for origin in v:
-            if origin in dangerous_origins:
-                logger.warning(f"🌐 SECURITY WARNING: Dangerous CORS origin '{origin}' detected. Consider specifying explicit origins instead of wildcards.")
+        if not info.data.get("client_mode"):
+            for origin in v:
+                if origin in dangerous_origins:
+                    logger.warning(f"🌐 SECURITY WARNING: Dangerous CORS origin '{origin}' detected. Consider specifying explicit origins instead of wildcards.")
 
-            # Validate URL format
-            if not origin.startswith(("http://", "https://")) and origin not in dangerous_origins:
-                logger.warning(f"⚠️  SECURITY WARNING: Invalid origin format '{origin}'. Origins should start with http:// or https://")
+                # Validate URL format
+                if not origin.startswith(("http://", "https://")) and origin not in dangerous_origins:
+                    logger.warning(f"⚠️  SECURITY WARNING: Invalid origin format '{origin}'. Origins should start with http:// or https://")
 
         return set({str(origin) for origin in v})
 
     @field_validator("database_url")
     @classmethod
-    def validate_database_url(cls, v: str) -> str:
+    def validate_database_url(cls, v: str, info: ValidationInfo) -> str:
         """Validate database connection string security.
 
         Args:
             v: The database URL to validate.
+            info: ValidationInfo containing field data.
 
         Returns:
             str: The validated database URL.
         """
         # Check for hardcoded passwords in non-SQLite databases
-        if not v.startswith("sqlite"):
-            if "password" in v and any(weak in v for weak in ["password", "123", "admin", "test"]):
-                logger.warning("Potentially weak database password detected. Consider using a stronger password.")
+        if not info.data.get("client_mode"):
+            if not v.startswith("sqlite"):
+                if "password" in v and any(weak in v for weak in ["password", "123", "admin", "test"]):
+                    logger.warning("Potentially weak database password detected. Consider using a stronger password.")
 
-        # Warn about SQLite in production
-        if v.startswith("sqlite"):
-            logger.info("Using SQLite database. Consider PostgreSQL or MySQL for production.")
+            # Warn about SQLite in production
+            if v.startswith("sqlite"):
+                logger.info("Using SQLite database. Consider PostgreSQL or MySQL for production.")
 
         return v
 
@@ -557,6 +569,9 @@ class Settings(BaseSettings):
         Returns:
             Itself.
         """
+        if self.client_mode:
+            return self
+
         # Check for dangerous combinations - only log warnings, don't raise errors
         if not self.auth_required and self.mcpgateway_ui_enabled:
             logger.warning("🔓 SECURITY WARNING: Admin UI is enabled without authentication. Consider setting AUTH_REQUIRED=true for production.")
@@ -716,6 +731,34 @@ class Settings(BaseSettings):
     # Log Buffer (for in-memory storage in admin UI)
     log_buffer_size_mb: float = 1.0  # Size of in-memory log buffer in MB
 
+    # ===================================
+    # Observability Configuration
+    # ===================================
+
+    # Enable observability features (traces, spans, metrics)
+    observability_enabled: bool = Field(default=False, description="Enable observability tracing and metrics collection")
+
+    # Automatic HTTP request tracing
+    observability_trace_http_requests: bool = Field(default=True, description="Automatically trace HTTP requests")
+
+    # Trace retention period (days)
+    observability_trace_retention_days: int = Field(default=7, ge=1, description="Number of days to retain trace data")
+
+    # Maximum traces to store (prevents unbounded growth)
+    observability_max_traces: int = Field(default=100000, ge=1000, description="Maximum number of traces to retain")
+
+    # Sample rate (0.0 to 1.0) - 1.0 means trace everything
+    observability_sample_rate: float = Field(default=1.0, ge=0.0, le=1.0, description="Trace sampling rate (0.0-1.0)")
+
+    # Exclude paths from tracing (regex patterns)
+    observability_exclude_paths: List[str] = Field(default_factory=lambda: ["/health", "/healthz", "/ready", "/metrics", "/static/.*"], description="Paths to exclude from tracing (regex)")
+
+    # Enable performance metrics
+    observability_metrics_enabled: bool = Field(default=True, description="Enable metrics collection")
+
+    # Enable span events
+    observability_events_enabled: bool = Field(default=True, description="Enable event logging within spans")
+
     @field_validator("log_level", mode="before")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
@@ -814,32 +857,42 @@ class Settings(BaseSettings):
 
     @field_validator("sso_issuers", mode="before")
     @classmethod
-    def parse_issuers(cls, v: Any) -> set[str]:
+    def parse_issuers(cls, v: Any) -> list[str]:
         """
         Parse and validate the SSO issuers configuration value.
 
-        Accepts either a JSON array string (e.g. '["https://idp1.com", "https://idp2.com"]')
-        or an already-parsed list of issuer URLs. This allows environment variables to
-        provide issuers as JSON while still supporting direct list assignment in code.
+        Accepts:
+        - JSON array string: '["https://idp1.com", "https://idp2.com"]'
+        - Comma-separated string: "https://idp1.com, https://idp2.com"
+        - Empty string or None → []
+        - Already-parsed list
 
         Args:
-            v: The input value for SSO issuers, either a JSON array string
-                or a Python list.
+            v: The input value to parse.
 
         Returns:
-            list: A list of issuer URLs.
+            list[str]: Parsed list of issuer URLs.
 
         Raises:
-            ValueError: If the string input cannot be parsed as JSON.
+            ValueError: If the input is not a valid format.
         """
-
-        # Accept either a JSON array string or actual list
+        if v is None:
+            return []
+        if isinstance(v, list):
+            return v
         if isinstance(v, str):
-            try:
-                return json.loads(v)  # type: ignore[no-any-return]
-            except json.JSONDecodeError:
-                raise ValueError(f"SSO_ISSUERS must be a JSON array of URLs, got: {v!r}")
-        return v  # type: ignore[no-any-return]
+            s = v.strip()
+            if not s:
+                return []
+            if s.startswith("["):
+                try:
+                    parsed = json.loads(s)
+                    return parsed if isinstance(parsed, list) else []
+                except json.JSONDecodeError:
+                    raise ValueError(f"Invalid JSON for SSO_ISSUERS: {v!r}")
+            # Fallback to comma-separated parsing
+            return [item.strip() for item in s.split(",") if item.strip()]
+        raise ValueError("Invalid type for SSO_ISSUERS")
 
     # Resources
     resource_cache_size: int = 1000
@@ -874,6 +927,7 @@ class Settings(BaseSettings):
 
     # Validation Gateway URL
     gateway_validation_timeout: int = 5  # seconds
+    gateway_max_redirects: int = 5
 
     filelock_name: str = "gateway_service_leader.lock"
 
@@ -881,6 +935,7 @@ class Settings(BaseSettings):
     default_roots: List[str] = []
 
     # Database
+    db_driver: str = "mariadb+mariadbconnector"
     db_pool_size: int = 200
     db_max_overflow: int = 10
     db_pool_timeout: int = 30
@@ -907,7 +962,7 @@ class Settings(BaseSettings):
 
     # Plugin CLI settings
     plugins_cli_completion: bool = Field(default=False, description="Enable auto-completion for plugins CLI")
-    plugins_cli_markup_mode: str | None = Field(default=None, description="Set markup mode for plugins CLI")
+    plugins_cli_markup_mode: Literal["markdown", "rich", "disabled"] | None = Field(default=None, description="Set markup mode for plugins CLI")
 
     # Development
     dev_mode: bool = False
@@ -1261,7 +1316,7 @@ Disallow: /
     # Character validation patterns
     validation_name_pattern: str = r"^[a-zA-Z0-9_.\-\s]+$"  # Allow spaces for names
     validation_identifier_pattern: str = r"^[a-zA-Z0-9_\-\.]+$"  # No spaces for IDs
-    validation_safe_uri_pattern: str = r"^[a-zA-Z0-9_\-.:/?=&%]+$"
+    validation_safe_uri_pattern: str = r"^[a-zA-Z0-9_\-.:/?=&%{}]+$"
     validation_unsafe_uri_pattern: str = r'[<>"\'\\]'
     validation_tool_name_pattern: str = r"^[a-zA-Z][a-zA-Z0-9._-]*$"  # MCP tool naming
     validation_tool_method_pattern: str = r"^[a-zA-Z][a-zA-Z0-9_\./-]*$"
@@ -1340,6 +1395,57 @@ Disallow: /
 
     # Base URL for pagination links (defaults to request URL)
     pagination_base_url: Optional[str] = Field(default=None, description="Base URL for pagination links")
+
+    # Ed25519 keys for signing
+    enable_ed25519_signing: bool = Field(default=False, description="Enable Ed25519 signing for certificates")
+    prev_ed25519_private_key: SecretStr = Field(default=SecretStr(""), description="Previous Ed25519 private key for signing")
+    prev_ed25519_public_key: Optional[str] = Field(default=None, description="Derived previous Ed25519 public key")
+    ed25519_private_key: SecretStr = Field(default=SecretStr(""), description="Ed25519 private key for signing")
+    ed25519_public_key: Optional[str] = Field(default=None, description="Derived Ed25519 public key")
+
+    @model_validator(mode="after")
+    def derive_public_keys(self) -> "Settings":
+        """
+        Derive public keys after all individual field validations are complete.
+
+        Returns:
+            Settings: The updated Settings instance with derived public keys.
+        """
+        for private_key_field in ["ed25519_private_key", "prev_ed25519_private_key"]:
+            public_key_field = private_key_field.replace("private", "public")
+
+            # 1. Get the private key SecretStr object
+            private_key_secret: SecretStr = getattr(self, private_key_field)
+
+            # 2. Proceed only if a key is present and the public key hasn't been set
+            pem = private_key_secret.get_secret_value().strip()
+            if not pem:
+                continue
+
+            try:
+                # Load the private key
+                private_key = serialization.load_pem_private_key(pem.encode(), password=None)
+                if not isinstance(private_key, ed25519.Ed25519PrivateKey):
+                    # This check is useful, though model_validator should not raise
+                    # for an invalid key if the field validator has already passed.
+                    continue
+
+                # Derive and PEM-encode the public key
+                public_key = private_key.public_key()
+                public_pem = public_key.public_bytes(
+                    encoding=serialization.Encoding.PEM,
+                    format=serialization.PublicFormat.SubjectPublicKeyInfo,
+                ).decode()
+
+                # 3. Set the public key attribute directly on the model instance (self)
+                setattr(self, public_key_field, public_pem)
+                # logger.info(f"Derived and stored {public_key_field} automatically.")
+
+            except Exception:
+                logger.warning("Failed to derive public key for private_key")
+                # You can choose to raise an error here if a failure should halt model creation
+
+        return self
 
     def __init__(self, **kwargs: Any) -> None:
         """Initialize Settings with environment variable parsing.
@@ -1431,8 +1537,11 @@ Disallow: /
 
 
 @lru_cache()
-def get_settings() -> Settings:
+def get_settings(**kwargs: Any) -> Settings:
     """Get cached settings instance.
+
+    Args:
+        **kwargs: Keyword arguments to pass to the Settings setup.
 
     Returns:
         Settings: A cached instance of the Settings class.
@@ -1448,7 +1557,7 @@ def get_settings() -> Settings:
     """
     # Instantiate a fresh Pydantic Settings object,
     # loading from env vars or .env exactly once.
-    cfg = Settings()
+    cfg = Settings(**kwargs)
     # Validate that transport_type is correct; will
     # raise if mis-configured.
     cfg.validate_transport()
@@ -1470,7 +1579,24 @@ def generate_settings_schema() -> dict[str, Any]:
     return Settings.model_json_schema(mode="validation")
 
 
-settings = get_settings()
+# Lazy "instance" of settings
+class LazySettingsWrapper:
+    """Lazily initialize settings singleton on getattr"""
+
+    def __getattr__(self, key: str) -> Any:
+        """Get the real settings object and forward to it
+
+        Args:
+            key: The key to fetch from settings
+
+        Returns:
+            Any: The value of the attribute on the settings
+        """
+        return getattr(get_settings(), key)
+
+
+settings = LazySettingsWrapper()
+
 
 if __name__ == "__main__":
     if "--schema" in sys.argv:

@@ -63,16 +63,19 @@ from mcpgateway.admin import admin_router, set_logging_service
 from mcpgateway.auth import get_current_user
 from mcpgateway.bootstrap_db import main as bootstrap_db
 from mcpgateway.cache import ResourceCache, SessionRegistry
+from mcpgateway.common.models import InitializeResult
+from mcpgateway.common.models import JSONRPCError as PydanticJSONRPCError
+from mcpgateway.common.models import ListResourceTemplatesResult, LogLevel, Root
 from mcpgateway.config import settings
 from mcpgateway.db import refresh_slugs_on_startup, SessionLocal
 from mcpgateway.db import Tool as DbTool
 from mcpgateway.handlers.sampling import SamplingHandler
+from mcpgateway.middleware.http_auth_middleware import HttpAuthMiddleware
 from mcpgateway.middleware.protocol_version import MCPProtocolVersionMiddleware
 from mcpgateway.middleware.rbac import get_current_user_with_permissions, require_permission
 from mcpgateway.middleware.request_logging_middleware import RequestLoggingMiddleware
 from mcpgateway.middleware.security_headers import SecurityHeadersMiddleware
 from mcpgateway.middleware.token_scoping import token_scoping_middleware
-from mcpgateway.models import InitializeResult, ListResourceTemplatesResult, LogLevel, Root
 from mcpgateway.observability import init_telemetry
 from mcpgateway.plugins.framework import PluginError, PluginManager, PluginViolationError
 from mcpgateway.routers.well_known import router as well_known_router
@@ -105,7 +108,7 @@ from mcpgateway.schemas import (
 from mcpgateway.services.a2a_service import A2AAgentError, A2AAgentNameConflictError, A2AAgentNotFoundError, A2AAgentService
 from mcpgateway.services.completion_service import CompletionService
 from mcpgateway.services.export_service import ExportError, ExportService
-from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayError, GatewayNameConflictError, GatewayNotFoundError, GatewayService, GatewayUrlConflictError
+from mcpgateway.services.gateway_service import GatewayConnectionError, GatewayDuplicateConflictError, GatewayError, GatewayNameConflictError, GatewayNotFoundError, GatewayService
 from mcpgateway.services.import_service import ConflictStrategy, ImportConflictError
 from mcpgateway.services.import_service import ImportError as ImportServiceError
 from mcpgateway.services.import_service import ImportService, ImportValidationError
@@ -312,30 +315,57 @@ def jsonpath_modifier(data: Any, jsonpath: str = "$[*]", mappings: Optional[Dict
     results = [match.value for match in main_matches]
 
     if mappings:
-        mapped_results = []
-        for item in results:
-            mapped_item = {}
-            for new_key, mapping_expr_str in mappings.items():
-                try:
-                    mapping_expr = parse(mapping_expr_str)
-                except Exception as e:
-                    raise HTTPException(status_code=400, detail=f"Invalid mapping JSONPath for key '{new_key}': {e}")
-                try:
-                    mapping_matches = mapping_expr.find(item)
-                except Exception as e:
-                    raise HTTPException(status_code=400, detail=f"Error executing mapping JSONPath for key '{new_key}': {e}")
-                if not mapping_matches:
-                    mapped_item[new_key] = None
-                elif len(mapping_matches) == 1:
-                    mapped_item[new_key] = mapping_matches[0].value
-                else:
-                    mapped_item[new_key] = [m.value for m in mapping_matches]
-            mapped_results.append(mapped_item)
-        results = mapped_results
+        results = transform_data_with_mappings(results, mappings)
 
     if len(results) == 1 and isinstance(results[0], dict):
         return results[0]
+
     return results
+
+
+def transform_data_with_mappings(data: list[Any], mappings: dict[str, str]) -> list[Any]:
+    """
+    Applies the given JSONPath expression and mappings to the data.
+    Only return data that is required by the user dynamically.
+
+    Args:
+        data: The set of data to apply mappings to.
+        mappings: dictionary of mappings where keys are new field names
+
+    Returns:
+        list[Any]: A list (or mapped list) of re-mapped data
+
+    Raises:
+        HTTPException: If there's an error parsing or executing the JSONPath expressions.
+
+    Examples:
+        >>> transform_data_with_mappings([{'first_name': "Bruce", 'second_name': "Wayne"},{'first_name': "Diana", 'second_name': "Prince"}], {"n": "$.first_name"})
+        [{'n': 'Bruce'}, {'n': 'Diana'}]
+    """
+
+    mapped_results = []
+    for item in data:
+        mapped_item = {}
+        for new_key, mapping_expr_str in mappings.items():
+            try:
+                mapping_expr = parse(mapping_expr_str)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Invalid mapping JSONPath for key '{new_key}': {e}")
+
+            try:
+                mapping_matches = mapping_expr.find(item)
+            except Exception as e:
+                raise HTTPException(status_code=400, detail=f"Error executing mapping JSONPath for key '{new_key}': {e}")
+
+            if not mapping_matches:
+                mapped_item[new_key] = None
+            elif len(mapping_matches) == 1:
+                mapped_item[new_key] = mapping_matches[0].value
+            else:
+                mapped_item[new_key] = [m.value for m in mapping_matches]
+        mapped_results.append(mapped_item)
+
+    return mapped_results
 
 
 ####################
@@ -371,24 +401,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     try:
         # Validate security configuration
-        await validate_security_configuration()
+        validate_security_configuration()
 
         if plugin_manager:
             await plugin_manager.initialize()
             logger.info(f"Plugin manager initialized with {plugin_manager.plugin_count} plugins")
 
         if settings.enable_header_passthrough:
-            logger.info(f"🔄 Header Passthrough: ENABLED (default headers: {settings.default_passthrough_headers})")
-            if settings.enable_overwrite_base_headers:
-                logger.warning("⚠️  Base Header Override: ENABLED - Client headers can override gateway headers")
-            else:
-                logger.info("🔒 Base Header Override: DISABLED - Gateway headers take precedence")
-            db_gen = get_db()
-            db = next(db_gen)  # pylint: disable=stop-iteration-return
-            try:
-                await set_global_passthrough_headers(db)
-            finally:
-                db.close()
+            await setup_passthrough_headers()
         else:
             logger.info("🔒 Header Passthrough: DISABLED")
 
@@ -419,14 +439,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
         # Bootstrap SSO providers from environment configuration
         if settings.sso_enabled:
-            try:
-                # First-Party
-                from mcpgateway.utils.sso_bootstrap import bootstrap_sso_providers  # pylint: disable=import-outside-toplevel
-
-                bootstrap_sso_providers()
-                logger.info("SSO providers bootstrapped successfully")
-            except Exception as e:
-                logger.warning(f"Failed to bootstrap SSO providers: {e}")
+            attempt_to_bootstrap_sso_providers()
 
         logger.info("All services initialized successfully")
 
@@ -482,12 +495,54 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             elicitation_service = get_elicitation_service()
             services_to_shutdown.insert(5, elicitation_service)
 
-        for service in services_to_shutdown:
-            try:
-                await service.shutdown()
-            except Exception as e:
-                logger.error(f"Error shutting down {service.__class__.__name__}: {str(e)}")
+        await shutdown_services(services_to_shutdown)
+
         logger.info("Shutdown complete")
+
+
+async def shutdown_services(services_to_shutdown: list[Any]):
+    """
+    Awaits shutdown of services provided in a list
+
+    Args:
+        services_to_shutdown (list[Any]): list of services to shutdown
+    """
+    for service in services_to_shutdown:
+        try:
+            await service.shutdown()
+        except Exception as e:
+            logger.error(f"Error shutting down {service.__class__.__name__}: {str(e)}")
+
+
+async def setup_passthrough_headers():
+    """
+    Enables configuration and logs active settings as needed for when passthrough headers are enabled.
+    """
+    logger.info(f"🔄 Header Passthrough: ENABLED (default headers: {settings.default_passthrough_headers})")
+    if settings.enable_overwrite_base_headers:
+        logger.warning("⚠️  Base Header Override: ENABLED - Client headers can override gateway headers")
+    else:
+        logger.info("🔒 Base Header Override: DISABLED - Gateway headers take precedence")
+    db_gen = get_db()
+    db = next(db_gen)  # pylint: disable=stop-iteration-return
+    try:
+        await set_global_passthrough_headers(db)
+    finally:
+        db.close()
+
+
+def attempt_to_bootstrap_sso_providers():
+    """
+    Try to bootstrap SSO provider services based on settings.
+    """
+    try:
+        # First-Party
+        from mcpgateway.utils.sso_bootstrap import bootstrap_sso_providers  # pylint: disable=import-outside-toplevel
+
+        bootstrap_sso_providers()
+        logger.info("SSO providers bootstrapped successfully")
+    except Exception as e:
+        logger.warning(f"Failed to bootstrap SSO providers: {e}")
 
 
 # Initialize FastAPI app with orjson for 2-3x faster JSON serialization
@@ -504,22 +559,25 @@ app = FastAPI(
 setup_metrics(app)
 
 
-async def validate_security_configuration():
-    """Validate security configuration on startup."""
+def validate_security_configuration():
+    """
+    Validate security configuration on startup.
+    This function encapsulates:
+     - verifying the configuration,
+     - logging the output for warnings,
+     - critical issues
+     - security recommendations
+
+     Args: None
+     Raises: Passthrough Errors/Exceptions but doesn't raise any of its own.
+    """
     logger.info("🔒 Validating security configuration...")
 
     # Get security status
-    security_status = settings.get_security_status()
+    security_status: settings.SecurityStatus = settings.get_security_status()
     warnings = security_status["warnings"]
 
-    # Log warnings
-    if warnings:
-        logger.warning("=" * 60)
-        logger.warning("🚨 SECURITY WARNINGS DETECTED:")
-        logger.warning("=" * 60)
-        for warning in warnings:
-            logger.warning(f"  {warning}")
-        logger.warning("=" * 60)
+    log_warnings(warnings)
 
     # Critical security checks (fail startup only if REQUIRE_STRONG_SECRETS=true)
     critical_issues = []
@@ -533,6 +591,37 @@ async def validate_security_configuration():
     if not settings.auth_required and settings.federation_enabled and not settings.dev_mode:
         critical_issues.append("Federation enabled without authentication in non-dev mode. This is a critical security risk!")
 
+    log_critical_issues(critical_issues)
+
+    log_security_recommendations(security_status)
+
+
+def log_warnings(warnings: list[str]):
+    """
+    Log warnings from list of warnings provided
+
+    Args:
+        warnings: List
+    """
+    if warnings:
+        logger.warning("=" * 60)
+        logger.warning("🚨 SECURITY WARNINGS DETECTED:")
+        logger.warning("=" * 60)
+        for warning in warnings:
+            logger.warning(f"  {warning}")
+        logger.warning("=" * 60)
+
+
+def log_critical_issues(critical_issues: list[Any]):
+    """
+    Log critical based on configuration settings
+    If REQUIRE_STRONG_SECRETS set, this will output critical errors and exit the mcpgateway server.
+
+    Args:
+        critical_issues: List
+
+    Returns: None
+    """
     # Handle critical issues based on REQUIRE_STRONG_SECRETS setting
     if critical_issues:
         if settings.require_strong_secrets:
@@ -554,7 +643,16 @@ async def validate_security_configuration():
                 logger.warning(f"  • {issue}")
             logger.warning("=" * 60)
 
-    # Log security recommendations
+
+def log_security_recommendations(security_status: settings.SecurityStatus):
+    """
+    Log security recommendations based on configuration settings
+
+    Args:
+        security_status (settings.SecurityStatus): The SecurityStatus object for checking and logging current security settings from MCPGateway.
+
+    Returns: None
+    """
     if not security_status["secure_secrets"] or not security_status["auth_enabled"]:
         logger.info("=" * 60)
         logger.info("📋 SECURITY RECOMMENDATIONS:")
@@ -702,15 +800,16 @@ async def plugin_violation_exception_handler(_request: Request, exc: PluginViola
              violation details.
 
     Returns:
-        JSONResponse: A 403 response with access forbidden.
+        JSONResponse: A 200 response with error details in JSON-RPC format.
 
     Examples:
         >>> from mcpgateway.plugins.framework import PluginViolationError
         >>> from mcpgateway.plugins.framework.models import PluginViolation
         >>> from fastapi import Request
         >>> import asyncio
+        >>> import json
         >>>
-        >>> # Create a mock integrity error
+        >>> # Create a plugin violation error
         >>> mock_error = PluginViolationError(message="plugin violation",violation = PluginViolation(
         ...     reason="Invalid input",
         ...     description="The input contains prohibited content",
@@ -719,11 +818,31 @@ async def plugin_violation_exception_handler(_request: Request, exc: PluginViola
         ... ))
         >>> result = asyncio.run(plugin_violation_exception_handler(None, mock_error))
         >>> result.status_code
-        403
+        200
+        >>> content = json.loads(result.body.decode())
+        >>> content["error"]["code"]
+        -32602
+        >>> "Plugin Violation:" in content["error"]["message"]
+        True
+        >>> content["error"]["data"]["plugin_error_code"]
+        'PROHIBITED_CONTENT'
     """
     policy_violation = exc.violation.model_dump() if exc.violation else {}
+    message = exc.violation.description if exc.violation else "A plugin violation occurred."
     policy_violation["message"] = exc.message
-    return JSONResponse(status_code=403, content=policy_violation)
+    status_code = exc.violation.mcp_error_code if exc.violation and exc.violation.mcp_error_code else -32602
+    violation_details: dict[str, Any] = {}
+    if exc.violation:
+        if exc.violation.description:
+            violation_details["description"] = exc.violation.description
+        if exc.violation.details:
+            violation_details["details"] = exc.violation.details
+        if exc.violation.code:
+            violation_details["plugin_error_code"] = exc.violation.code
+        if exc.violation.plugin_name:
+            violation_details["plugin_name"] = exc.violation.plugin_name
+    json_rpc_error = PydanticJSONRPCError(code=status_code, message="Plugin Violation: " + message, data=violation_details)
+    return JSONResponse(status_code=200, content={"error": json_rpc_error.model_dump()})
 
 
 @app.exception_handler(PluginError)
@@ -740,15 +859,16 @@ async def plugin_exception_handler(_request: Request, exc: PluginError):
              violation details.
 
     Returns:
-        JSONResponse: A 500 response with internal server error.
+        JSONResponse: A 200 response with error details in JSON-RPC format.
 
     Examples:
-        >>> from mcpgateway.plugins.framework import PluginViolationError
+        >>> from mcpgateway.plugins.framework import PluginError
         >>> from mcpgateway.plugins.framework.models import PluginErrorModel
         >>> from fastapi import Request
         >>> import asyncio
+        >>> import json
         >>>
-        >>> # Create a mock integrity error
+        >>> # Create a plugin error
         >>> mock_error = PluginError(error = PluginErrorModel(
         ...     message="plugin error",
         ...     code="timeout",
@@ -757,10 +877,29 @@ async def plugin_exception_handler(_request: Request, exc: PluginError):
         ... ))
         >>> result = asyncio.run(plugin_exception_handler(None, mock_error))
         >>> result.status_code
-        500
+        200
+        >>> content = json.loads(result.body.decode())
+        >>> content["error"]["code"]
+        -32603
+        >>> "Plugin Error:" in content["error"]["message"]
+        True
+        >>> content["error"]["data"]["plugin_error_code"]
+        'timeout'
+        >>> content["error"]["data"]["plugin_name"]
+        'abc'
     """
-    error_obj = exc.error.model_dump() if exc.error else {}
-    return JSONResponse(status_code=500, content=error_obj)
+    message = exc.error.message if exc.error else "A plugin error occurred."
+    status_code = exc.error.mcp_error_code if exc.error else -32603
+    error_details: dict[str, Any] = {}
+    if exc.error:
+        if exc.error.details:
+            error_details["details"] = exc.error.details
+        if exc.error.code:
+            error_details["plugin_error_code"] = exc.error.code
+        if exc.error.plugin_name:
+            error_details["plugin_name"] = exc.error.plugin_name
+    json_rpc_error = PydanticJSONRPCError(code=status_code, message="Plugin Error: " + message, data=error_details)
+    return JSONResponse(status_code=200, content={"error": json_rpc_error.model_dump()})
 
 
 class DocsAuthMiddleware(BaseHTTPMiddleware):
@@ -770,6 +909,10 @@ class DocsAuthMiddleware(BaseHTTPMiddleware):
 
     If a request to one of these paths is made without a valid token,
     the request is rejected with a 401 or 403 error.
+
+    Note:
+        OPTIONS requests are exempt from authentication to support CORS preflight
+        as per RFC 7231 Section 4.3.7 (OPTIONS must not require authentication).
 
     Note:
         When DOCS_ALLOW_BASIC_AUTH is enabled, Basic Authentication
@@ -811,6 +954,10 @@ class DocsAuthMiddleware(BaseHTTPMiddleware):
             True
         """
         protected_paths = ["/docs", "/redoc", "/openapi.json"]
+
+        # Allow OPTIONS requests to pass through for CORS preflight (RFC 7231)
+        if request.method == "OPTIONS":
+            return await call_next(request)
 
         if any(request.url.path.startswith(p) for p in protected_paths):
             try:
@@ -1018,6 +1165,10 @@ else:
     # Add streamable HTTP middleware for /mcp routes
     app.add_middleware(MCPPathRewriteMiddleware)
 
+# Add HTTP authentication hook middleware for plugins (before auth dependencies)
+if plugin_manager:
+    app.add_middleware(HttpAuthMiddleware, plugin_manager=plugin_manager)
+
 # Add custom DocsAuthMiddleware
 app.add_middleware(DocsAuthMiddleware)
 
@@ -1027,6 +1178,26 @@ app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 # Add request logging middleware if enabled
 if settings.log_requests:
     app.add_middleware(RequestLoggingMiddleware, log_requests=settings.log_requests, log_level=settings.log_level, max_body_size=settings.log_max_size_mb * 1024 * 1024)  # Convert MB to bytes
+
+# Add observability middleware if enabled
+# Note: Middleware runs in REVERSE order (last added runs first)
+# We add ObservabilityMiddleware first so it wraps AuthContextMiddleware
+# Execution order will be: AuthContext -> Observability -> Request Handler
+if settings.observability_enabled:
+    # First-Party
+    from mcpgateway.middleware.observability_middleware import ObservabilityMiddleware
+
+    app.add_middleware(ObservabilityMiddleware, enabled=True)
+    logger.info("🔍 Observability middleware enabled - tracing all HTTP requests")
+
+    # Add authentication context middleware (runs BEFORE observability in execution)
+    # First-Party
+    from mcpgateway.middleware.auth_middleware import AuthContextMiddleware
+
+    app.add_middleware(AuthContextMiddleware)
+    logger.info("🔐 Authentication context middleware enabled - extracting user info for observability")
+else:
+    logger.info("🔍 Observability middleware disabled")
 
 # Set up Jinja2 templates and store in app state for later use
 templates = Jinja2Templates(directory=str(settings.templates_dir))
@@ -1444,6 +1615,7 @@ async def handle_sampling(request: Request, db: Session = Depends(get_db), user=
 @server_router.get("/", response_model=List[ServerRead])
 @require_permission("servers.read")
 async def list_servers(
+    request: Request,
     include_inactive: bool = False,
     tags: Optional[str] = None,
     team_id: Optional[str] = None,
@@ -1455,6 +1627,7 @@ async def list_servers(
     Lists servers accessible to the user, with team filtering support.
 
     Args:
+        request (Request): The incoming request object for team_id retrieval.
         include_inactive (bool): Whether to include inactive servers in the response.
         tags (Optional[str]): Comma-separated list of tags to filter by.
         team_id (Optional[str]): Filter by specific team ID.
@@ -1471,6 +1644,20 @@ async def list_servers(
         tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
     # Get user email for team filtering
     user_email = get_user_email(user)
+
+    # Check team ID from token
+    token_team_id = getattr(request.state, "team_id", None)
+
+    # Check for team ID mismatch
+    if team_id is not None and token_team_id is not None and team_id != token_team_id:
+        return JSONResponse(
+            content={"message": "Access issue: This API token does not have the required permissions for this team."},
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    # Determine final team ID
+    team_id = team_id or token_team_id
+
     # Use team-filtered server listing
     if team_id or visibility:
         data = await server_service.list_servers_for_user(db=db, user_email=user_email, team_id=team_id, visibility=visibility, include_inactive=include_inactive)
@@ -1542,15 +1729,17 @@ async def create_server(
         # Get user email and handle team assignment
         user_email = get_user_email(user)
 
-        # If no team specified, get user's personal team
-        if not team_id:
-            # First-Party
-            from mcpgateway.services.team_management_service import TeamManagementService  # pylint: disable=import-outside-toplevel
+        token_team_id = getattr(request.state, "team_id", None)
 
-            team_service = TeamManagementService(db)
-            user_teams = await team_service.get_user_teams(user_email, include_personal=True)
-            personal_team = next((team for team in user_teams if team.is_personal), None)
-            team_id = personal_team.id if personal_team else None
+        # Check for team ID mismatch
+        if team_id is not None and token_team_id is not None and team_id != token_team_id:
+            return JSONResponse(
+                content={"message": "Access issue: This API token does not have the required permissions for this team."},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Determine final team ID
+        team_id = team_id or token_team_id
 
         logger.debug(f"User {user_email} is creating a new server for team {team_id}")
         return await server_service.register_server(
@@ -1777,7 +1966,7 @@ async def message_endpoint(request: Request, server_id: str, user=Depends(get_cu
                 if request_id:
                     # Try to complete the elicitation
                     # First-Party
-                    from mcpgateway.models import ElicitResult  # pylint: disable=import-outside-toplevel
+                    from mcpgateway.common.models import ElicitResult  # pylint: disable=import-outside-toplevel
                     from mcpgateway.services.elicitation_service import get_elicitation_service  # pylint: disable=import-outside-toplevel
 
                     elicitation_service = get_elicitation_service()
@@ -1812,6 +2001,7 @@ async def message_endpoint(request: Request, server_id: str, user=Depends(get_cu
 async def server_get_tools(
     server_id: str,
     include_inactive: bool = False,
+    include_metrics: bool = False,
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
 ) -> List[Dict[str, Any]]:
@@ -1825,6 +2015,7 @@ async def server_get_tools(
     Args:
         server_id (str): ID of the server
         include_inactive (bool): Whether to include inactive tools in the results.
+        include_metrics (bool): Whether to include metrics in the tools results.
         db (Session): Database session dependency.
         user (str): Authenticated user dependency.
 
@@ -1832,7 +2023,7 @@ async def server_get_tools(
         List[ToolRead]: A list of tool records formatted with by_alias=True.
     """
     logger.debug(f"User: {user} has listed tools for the server_id: {server_id}")
-    tools = await tool_service.list_server_tools(db, server_id=server_id, include_inactive=include_inactive)
+    tools = await tool_service.list_server_tools(db, server_id=server_id, include_inactive=include_inactive, include_metrics=include_metrics)
     return [tool.model_dump(by_alias=True) for tool in tools]
 
 
@@ -2010,15 +2201,17 @@ async def create_a2a_agent(
         # Get user email and handle team assignment
         user_email = get_user_email(user)
 
-        # If no team specified, get user's personal team
-        if not team_id:
-            # First-Party
-            from mcpgateway.services.team_management_service import TeamManagementService  # pylint: disable=import-outside-toplevel
+        token_team_id = getattr(request.state, "team_id", None)
 
-            team_service = TeamManagementService(db)
-            user_teams = await team_service.get_user_teams(user_email, include_personal=True)
-            personal_team = next((team for team in user_teams if team.is_personal), None)
-            team_id = personal_team.id if personal_team else None
+        # Check for team ID mismatch
+        if team_id is not None and token_team_id is not None and team_id != token_team_id:
+            return JSONResponse(
+                content={"message": "Access issue: This API token does not have the required permissions for this team."},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Determine final team ID
+        team_id = team_id or token_team_id
 
         logger.debug(f"User {user_email} is creating a new A2A agent for team {team_id}")
         if a2a_service is None:
@@ -2222,11 +2415,13 @@ async def invoke_a2a_agent(
 @tool_router.get("/", response_model=Union[List[ToolRead], List[Dict], Dict, List])
 @require_permission("tools.read")
 async def list_tools(
+    request: Request,
     cursor: Optional[str] = None,
     include_inactive: bool = False,
     tags: Optional[str] = None,
     team_id: Optional[str] = Query(None, description="Filter by team ID"),
     visibility: Optional[str] = Query(None, description="Filter by visibility: private, team, public"),
+    gateway_id: Optional[str] = Query(None, description="Filter by gateway ID"),
     db: Session = Depends(get_db),
     apijsonpath: JsonPathModifier = Body(None),
     user=Depends(get_current_user_with_permissions),
@@ -2234,11 +2429,13 @@ async def list_tools(
     """List all registered tools with team-based filtering and pagination support.
 
     Args:
+        request (Request): The FastAPI request object for team_id retrieval
         cursor: Pagination cursor for fetching the next set of results
         include_inactive: Whether to include inactive tools in the results
         tags: Comma-separated list of tags to filter by (e.g., "api,data")
         team_id: Optional team ID to filter tools by specific team
         visibility: Optional visibility filter (private, team, public)
+        gateway_id: Optional gateway ID to filter tools by specific gateway
         db: Database session
         apijsonpath: JSON path modifier to filter or transform the response
         user: Authenticated user with permissions
@@ -2255,6 +2452,19 @@ async def list_tools(
     # Get user email for team filtering
     user_email = get_user_email(user)
 
+    # Check team_id from token as well
+    token_team_id = getattr(request.state, "team_id", None)
+
+    # Check for team ID mismatch
+    if team_id is not None and token_team_id is not None and team_id != token_team_id:
+        return JSONResponse(
+            content={"message": "Access issue: This API token does not have the required permissions for this team."},
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    # Determine final team ID
+    team_id = team_id or token_team_id
+
     # Use team-filtered tool listing
     if team_id or visibility:
         data = await tool_service.list_tools_for_user(db=db, user_email=user_email, team_id=team_id, visibility=visibility, include_inactive=include_inactive)
@@ -2265,6 +2475,10 @@ async def list_tools(
     else:
         # Use existing method for backward compatibility when no team filtering
         data, _ = await tool_service.list_tools(db, cursor=cursor, include_inactive=include_inactive, tags=tags_list)
+
+    # Apply gateway_id filtering if provided
+    if gateway_id:
+        data = [tool for tool in data if str(tool.gateway_id) == gateway_id]
 
     if apijsonpath is None:
         return data
@@ -2309,15 +2523,17 @@ async def create_tool(
         # Get user email and handle team assignment
         user_email = get_user_email(user)
 
-        # If no team specified, get user's personal team
-        if not team_id:
-            # First-Party
-            from mcpgateway.services.team_management_service import TeamManagementService  # pylint: disable=import-outside-toplevel
+        token_team_id = getattr(request.state, "team_id", None)
 
-            team_service = TeamManagementService(db)
-            user_teams = await team_service.get_user_teams(user_email, include_personal=True)
-            personal_team = next((team for team in user_teams if team.is_personal), None)
-            team_id = personal_team.id if personal_team else None
+        # Check for team ID mismatch
+        if team_id is not None and token_team_id is not None and team_id != token_team_id:
+            return JSONResponse(
+                content={"message": "Access issue: This API token does not have the required permissions for this team."},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Determine final team ID
+        team_id = team_id or token_team_id
 
         logger.debug(f"User {user_email} is creating a new tool for team {team_id}")
         return await tool_service.register_tool(
@@ -2589,6 +2805,7 @@ async def toggle_resource_status(
 @resource_router.get("/", response_model=List[ResourceRead])
 @require_permission("resources.read")
 async def list_resources(
+    request: Request,
     cursor: Optional[str] = None,
     include_inactive: bool = False,
     tags: Optional[str] = None,
@@ -2601,6 +2818,7 @@ async def list_resources(
     Retrieve a list of resources accessible to the user, with team filtering support.
 
     Args:
+        request (Request): The FastAPI request object for team_id retrieval
         cursor (Optional[str]): Optional cursor for pagination.
         include_inactive (bool): Whether to include inactive resources.
         tags (Optional[str]): Comma-separated list of tags to filter by.
@@ -2618,6 +2836,19 @@ async def list_resources(
         tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
     # Get user email for team filtering
     user_email = get_user_email(user)
+
+    # Check team_id from token as well
+    token_team_id = getattr(request.state, "team_id", None)
+
+    # Check for team ID mismatch
+    if team_id is not None and token_team_id is not None and team_id != token_team_id:
+        return JSONResponse(
+            content={"message": "Access issue: This API token does not have the required permissions for this team."},
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    # Determine final team ID
+    team_id = team_id or token_team_id
 
     # Use team-filtered resource listing
     if team_id or visibility:
@@ -2670,15 +2901,17 @@ async def create_resource(
         # Get user email and handle team assignment
         user_email = get_user_email(user)
 
-        # If no team specified, get user's personal team
-        if not team_id:
-            # First-Party
-            from mcpgateway.services.team_management_service import TeamManagementService  # pylint: disable=import-outside-toplevel
+        token_team_id = getattr(request.state, "team_id", None)
 
-            team_service = TeamManagementService(db)
-            user_teams = await team_service.get_user_teams(user_email, include_personal=True)
-            personal_team = next((team for team in user_teams if team.is_personal), None)
-            team_id = personal_team.id if personal_team else None
+        # Check for team ID mismatch
+        if team_id is not None and token_team_id is not None and team_id != token_team_id:
+            return JSONResponse(
+                content={"message": "Access issue: This API token does not have the required permissions for this team."},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Determine final team ID
+        team_id = team_id or token_team_id
 
         logger.debug(f"User {user_email} is creating a new resource for team {team_id}")
         return await resource_service.register_resource(
@@ -2735,9 +2968,21 @@ async def read_resource(resource_id: str, request: Request, db: Session = Depend
     if cached := resource_cache.get(resource_id):
         return cached
 
+    # Get plugin contexts from request.state for cross-hook sharing
+    plugin_context_table = getattr(request.state, "plugin_context_table", None)
+    plugin_global_context = getattr(request.state, "plugin_global_context", None)
+
     try:
         # Call service with context for plugin support
-        content = await resource_service.read_resource(db, resource_id, request_id=request_id, user=user, server_id=server_id)
+        content = await resource_service.read_resource(
+            db,
+            resource_id=resource_id,
+            request_id=request_id,
+            user=user,
+            server_id=server_id,
+            plugin_context_table=plugin_context_table,
+            plugin_global_context=plugin_global_context,
+        )
     except (ResourceNotFoundError, ResourceError) as exc:
         # Translate to FastAPI HTTP error
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -2746,8 +2991,7 @@ async def read_resource(resource_id: str, request: Request, db: Session = Depend
     # Ensure a plain JSON-serializable structure
     try:
         # First-Party
-        # pylint: disable=import-outside-toplevel
-        from mcpgateway.models import ResourceContent, TextContent
+        from mcpgateway.common.models import ResourceContent, TextContent  # pylint: disable=import-outside-toplevel
 
         # If already a ResourceContent, serialize directly
         if isinstance(content, ResourceContent):
@@ -2859,21 +3103,20 @@ async def delete_resource(resource_id: str, db: Session = Depends(get_db), user=
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@resource_router.post("/subscribe/{resource_id}")
+@resource_router.post("/subscribe")
 @require_permission("resources.read")
-async def subscribe_resource(resource_id: str, user=Depends(get_current_user_with_permissions)) -> StreamingResponse:
+async def subscribe_resource(user=Depends(get_current_user_with_permissions)) -> StreamingResponse:
     """
     Subscribe to server-sent events (SSE) for a specific resource.
 
     Args:
-        resource_id (str): ID of the resource to subscribe to.
         user (str): Authenticated user.
 
     Returns:
         StreamingResponse: A streaming response with event updates.
     """
-    logger.debug(f"User {user} is subscribing to resource with resource_id {resource_id}")
-    return StreamingResponse(resource_service.subscribe_events(resource_id), media_type="text/event-stream")
+    logger.debug(f"User {user} is subscribing to resource")
+    return StreamingResponse(resource_service.subscribe_events(), media_type="text/event-stream")
 
 
 ###############
@@ -2921,6 +3164,7 @@ async def toggle_prompt_status(
 @prompt_router.get("/", response_model=List[PromptRead])
 @require_permission("prompts.read")
 async def list_prompts(
+    request: Request,
     cursor: Optional[str] = None,
     include_inactive: bool = False,
     tags: Optional[str] = None,
@@ -2933,6 +3177,7 @@ async def list_prompts(
     List prompts accessible to the user, with team filtering support.
 
     Args:
+        request (Request): The FastAPI request object for team_id retrieval
         cursor: Cursor for pagination.
         include_inactive: Include inactive prompts.
         tags: Comma-separated list of tags to filter by.
@@ -2950,6 +3195,19 @@ async def list_prompts(
         tags_list = [tag.strip() for tag in tags.split(",") if tag.strip()]
     # Get user email for team filtering
     user_email = get_user_email(user)
+
+    # Check team_id from token as well
+    token_team_id = getattr(request.state, "team_id", None)
+
+    # Check for team ID mismatch
+    if team_id is not None and token_team_id is not None and team_id != token_team_id:
+        return JSONResponse(
+            content={"message": "Access issue: This API token does not have the required permissions for this team."},
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    # Determine final team ID
+    team_id = team_id or token_team_id
 
     # Use team-filtered prompt listing
     if team_id or visibility:
@@ -3001,15 +3259,17 @@ async def create_prompt(
         # Get user email and handle team assignment
         user_email = get_user_email(user)
 
-        # If no team specified, get user's personal team
-        if not team_id:
-            # First-Party
-            from mcpgateway.services.team_management_service import TeamManagementService  # pylint: disable=import-outside-toplevel
+        token_team_id = getattr(request.state, "team_id", None)
 
-            team_service = TeamManagementService(db)
-            user_teams = await team_service.get_user_teams(user_email, include_personal=True)
-            personal_team = next((team for team in user_teams if team.is_personal), None)
-            team_id = personal_team.id if personal_team else None
+        # Check for team ID mismatch
+        if team_id is not None and token_team_id is not None and team_id != token_team_id:
+            return JSONResponse(
+                content={"message": "Access issue: This API token does not have the required permissions for this team."},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Determine final team ID
+        team_id = team_id or token_team_id
 
         logger.debug(f"User {user_email} is creating a new prompt for team {team_id}")
         return await prompt_service.register_prompt(
@@ -3048,6 +3308,7 @@ async def create_prompt(
 @prompt_router.post("/{prompt_id}")
 @require_permission("prompts.read")
 async def get_prompt(
+    request: Request,
     prompt_id: str,
     args: Dict[str, str] = Body({}),
     db: Session = Depends(get_db),
@@ -3060,6 +3321,7 @@ async def get_prompt(
 
 
     Args:
+        request: FastAPI request object.
         prompt_id: ID of the prompt.
         args: Template arguments.
         db: Database session.
@@ -3073,9 +3335,19 @@ async def get_prompt(
     """
     logger.debug(f"User: {user} requested prompt: {prompt_id} with args={args}")
 
+    # Get plugin contexts from request.state for cross-hook sharing
+    plugin_context_table = getattr(request.state, "plugin_context_table", None)
+    plugin_global_context = getattr(request.state, "plugin_global_context", None)
+
     try:
         PromptExecuteArgs(args=args)
-        result = await prompt_service.get_prompt(db, prompt_id, args)
+        result = await prompt_service.get_prompt(
+            db,
+            prompt_id,
+            args,
+            plugin_context_table=plugin_context_table,
+            plugin_global_context=plugin_global_context,
+        )
         logger.debug(f"Prompt execution successful for '{prompt_id}'")
     except Exception as ex:
         logger.error(f"Could not retrieve prompt {prompt_id}: {ex}")
@@ -3093,6 +3365,7 @@ async def get_prompt(
 @prompt_router.get("/{prompt_id}")
 @require_permission("prompts.read")
 async def get_prompt_no_args(
+    request: Request,
     prompt_id: str,
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
@@ -3102,6 +3375,7 @@ async def get_prompt_no_args(
     This endpoint is for convenience when no arguments are needed.
 
     Args:
+        request: FastAPI request object.
         prompt_id: The ID of the prompt to retrieve
         db: Database session
         user: Authenticated user
@@ -3113,7 +3387,18 @@ async def get_prompt_no_args(
         Exception: Re-raised from prompt service.
     """
     logger.debug(f"User: {user} requested prompt: {prompt_id} with no arguments")
-    return await prompt_service.get_prompt(db, prompt_id, {})
+
+    # Get plugin contexts from request.state for cross-hook sharing
+    plugin_context_table = getattr(request.state, "plugin_context_table", None)
+    plugin_global_context = getattr(request.state, "plugin_global_context", None)
+
+    return await prompt_service.get_prompt(
+        db,
+        prompt_id,
+        {},
+        plugin_context_table=plugin_context_table,
+        plugin_global_context=plugin_global_context,
+    )
 
 
 @prompt_router.put("/{prompt_id}", response_model=PromptRead)
@@ -3268,7 +3553,10 @@ async def toggle_gateway_status(
 @gateway_router.get("/", response_model=List[GatewayRead])
 @require_permission("gateways.read")
 async def list_gateways(
+    request: Request,
     include_inactive: bool = False,
+    team_id: Optional[str] = Query(None, description="Filter by team ID"),
+    visibility: Optional[str] = Query(None, description="Filter by visibility: private, team, public"),
     db: Session = Depends(get_db),
     user=Depends(get_current_user_with_permissions),
 ) -> List[GatewayRead]:
@@ -3276,7 +3564,10 @@ async def list_gateways(
     List all gateways.
 
     Args:
+        request (Request): The FastAPI request object for team_id retrieval
         include_inactive: Include inactive gateways.
+        team_id (Optional): Filter by specific team ID.
+        visibility (Optional): Filter by visibility (private, team, public).
         db: Database session.
         user: Authenticated user.
 
@@ -3284,6 +3575,25 @@ async def list_gateways(
         List of gateway records.
     """
     logger.debug(f"User '{user}' requested list of gateways with include_inactive={include_inactive}")
+
+    user_email = get_user_email(user)
+
+    # Check team_id from token
+    token_team_id = getattr(request.state, "team_id", None)
+
+    # Check for team ID mismatch
+    if team_id is not None and token_team_id is not None and team_id != token_team_id:
+        return JSONResponse(
+            content={"message": "Access issue: This API token does not have the required permissions for this team."},
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+
+    # Determine final team ID
+    team_id = team_id or token_team_id
+
+    if team_id or visibility:
+        return await gateway_service.list_gateways_for_user(db=db, user_email=user_email, team_id=team_id, visibility=visibility, include_inactive=include_inactive)
+
     return await gateway_service.list_gateways(db, include_inactive=include_inactive)
 
 
@@ -3315,18 +3625,20 @@ async def register_gateway(
 
         # Get user email and handle team assignment
         user_email = get_user_email(user)
-        team_id = gateway.team_id
+
+        token_team_id = getattr(request.state, "team_id", None)
+        gateway_team_id = gateway.team_id
+
+        # Check for team ID mismatch
+        if gateway_team_id is not None and token_team_id is not None and gateway_team_id != token_team_id:
+            return JSONResponse(
+                content={"message": "Access issue: This API token does not have the required permissions for this team."},
+                status_code=status.HTTP_403_FORBIDDEN,
+            )
+
+        # Determine final team ID
+        team_id = gateway_team_id or token_team_id
         visibility = gateway.visibility
-
-        # If no team specified, get user's personal team
-        if not team_id:
-            # First-Party
-            from mcpgateway.services.team_management_service import TeamManagementService  # pylint: disable=import-outside-toplevel
-
-            team_service = TeamManagementService(db)
-            user_teams = await team_service.get_user_teams(user_email, include_personal=True)
-            personal_team = next((team for team in user_teams if team.is_personal), None)
-            team_id = personal_team.id if personal_team else None
 
         logger.debug(f"User {user_email} is creating a new gateway for team {team_id}")
 
@@ -3348,8 +3660,8 @@ async def register_gateway(
             return JSONResponse(content={"message": "Unable to process input"}, status_code=status.HTTP_400_BAD_REQUEST)
         if isinstance(ex, GatewayNameConflictError):
             return JSONResponse(content={"message": "Gateway name already exists"}, status_code=status.HTTP_409_CONFLICT)
-        if isinstance(ex, GatewayUrlConflictError):
-            return JSONResponse(content={"message": "Gateway URL already exists"}, status_code=status.HTTP_409_CONFLICT)
+        if isinstance(ex, GatewayDuplicateConflictError):
+            return JSONResponse(content={"message": "Gateway already exists"}, status_code=status.HTTP_409_CONFLICT)
         if isinstance(ex, RuntimeError):
             return JSONResponse(content={"message": "Error during execution"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
         if isinstance(ex, ValidationError):
@@ -3426,8 +3738,8 @@ async def update_gateway(
             return JSONResponse(content={"message": "Unable to process input"}, status_code=status.HTTP_400_BAD_REQUEST)
         if isinstance(ex, GatewayNameConflictError):
             return JSONResponse(content={"message": "Gateway name already exists"}, status_code=status.HTTP_409_CONFLICT)
-        if isinstance(ex, GatewayUrlConflictError):
-            return JSONResponse(content={"message": "Gateway URL already exists"}, status_code=status.HTTP_409_CONFLICT)
+        if isinstance(ex, GatewayDuplicateConflictError):
+            return JSONResponse(content={"message": "Gateway already exists"}, status_code=status.HTTP_409_CONFLICT)
         if isinstance(ex, RuntimeError):
             return JSONResponse(content={"message": "Error during execution"}, status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
         if isinstance(ex, ValidationError):
@@ -3457,7 +3769,17 @@ async def delete_gateway(gateway_id: str, db: Session = Depends(get_db), user=De
     logger.debug(f"User '{user}' requested deletion of gateway {gateway_id}")
     try:
         user_email = user.get("email") if isinstance(user, dict) else str(user)
+        current = await gateway_service.get_gateway(db, gateway_id)
+        has_resources = bool(current.capabilities.get("resources"))
         await gateway_service.delete_gateway(db, gateway_id, user_email=user_email)
+
+        # If the gateway had resources and was successfully deleted, invalidate
+        # the whole resource cache. This is needed since the cache holds both
+        # individual resources and the full listing which will also need to be
+        # invalidated.
+        if has_resources:
+            await invalidate_resource_cache()
+
         return {"status": "success", "message": f"Gateway {gateway_id} deleted"}
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -3643,8 +3965,18 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user=Depen
                 raise JSONRPCError(-32602, "Missing resource URI in parameters", params)
             # Get user email for OAuth token selection
             user_email = get_user_email(user)
+            # Get plugin contexts from request.state for cross-hook sharing
+            plugin_context_table = getattr(request.state, "plugin_context_table", None)
+            plugin_global_context = getattr(request.state, "plugin_global_context", None)
             try:
-                result = await resource_service.read_resource(db, uri, request_id=request_id, user=user_email)
+                result = await resource_service.read_resource(
+                    db,
+                    resource_uri=uri,
+                    request_id=request_id,
+                    user=user_email,
+                    plugin_context_table=plugin_context_table,
+                    plugin_global_context=plugin_global_context,
+                )
                 if hasattr(result, "model_dump"):
                     result = {"contents": [result.model_dump(by_alias=True, exclude_none=True)]}
                 else:
@@ -3688,7 +4020,16 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user=Depen
             arguments = params.get("arguments", {})
             if not name:
                 raise JSONRPCError(-32602, "Missing prompt name in parameters", params)
-            result = await prompt_service.get_prompt(db, name, arguments)
+            # Get plugin contexts from request.state for cross-hook sharing
+            plugin_context_table = getattr(request.state, "plugin_context_table", None)
+            plugin_global_context = getattr(request.state, "plugin_global_context", None)
+            result = await prompt_service.get_prompt(
+                db,
+                name,
+                arguments,
+                plugin_context_table=plugin_context_table,
+                plugin_global_context=plugin_global_context,
+            )
             if hasattr(result, "model_dump"):
                 result = result.model_dump(by_alias=True, exclude_none=True)
         elif method == "ping":
@@ -3703,8 +4044,19 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user=Depen
                 raise JSONRPCError(-32602, "Missing tool name in parameters", params)
             # Get user email for OAuth token selection
             user_email = get_user_email(user)
+            # Get plugin contexts from request.state for cross-hook sharing
+            plugin_context_table = getattr(request.state, "plugin_context_table", None)
+            plugin_global_context = getattr(request.state, "plugin_global_context", None)
             try:
-                result = await tool_service.invoke_tool(db=db, name=name, arguments=arguments, request_headers=headers, app_user_email=user_email)
+                result = await tool_service.invoke_tool(
+                    db=db,
+                    name=name,
+                    arguments=arguments,
+                    request_headers=headers,
+                    app_user_email=user_email,
+                    plugin_context_table=plugin_context_table,
+                    plugin_global_context=plugin_global_context,
+                )
                 if hasattr(result, "model_dump"):
                     result = result.model_dump(by_alias=True, exclude_none=True)
             except ValueError:
@@ -3761,7 +4113,7 @@ async def handle_rpc(request: Request, db: Session = Depends(get_db), user=Depen
 
             # Validate params
             # First-Party
-            from mcpgateway.models import ElicitRequestParams  # pylint: disable=import-outside-toplevel
+            from mcpgateway.common.models import ElicitRequestParams  # pylint: disable=import-outside-toplevel
             from mcpgateway.services.elicitation_service import get_elicitation_service  # pylint: disable=import-outside-toplevel
 
             try:
@@ -4626,6 +4978,16 @@ app.include_router(server_router)
 app.include_router(metrics_router)
 app.include_router(tag_router)
 app.include_router(export_import_router)
+
+# Conditionally include observability router if enabled
+if settings.observability_enabled:
+    # First-Party
+    from mcpgateway.routers.observability import router as observability_router
+
+    app.include_router(observability_router)
+    logger.info("Observability router included - observability API endpoints enabled")
+else:
+    logger.info("Observability router not included - observability disabled")
 
 # Conditionally include A2A router if A2A features are enabled
 if settings.mcpgateway_a2a_enabled:

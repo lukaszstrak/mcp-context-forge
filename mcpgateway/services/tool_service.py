@@ -15,12 +15,12 @@ It handles:
 """
 
 # Standard
-import asyncio
 import base64
 from datetime import datetime, timezone
 import json
 import os
 import re
+import ssl
 import time
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from urllib.parse import parse_qs, urlparse
@@ -35,9 +35,13 @@ from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamablehttp_client
 from sqlalchemy import and_, case, delete, desc, Float, func, not_, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import joinedload, Session
 
 # First-Party
+from mcpgateway.common.models import Gateway as PydanticGateway
+from mcpgateway.common.models import TextContent
+from mcpgateway.common.models import Tool as PydanticTool
+from mcpgateway.common.models import ToolResult
 from mcpgateway.config import settings
 from mcpgateway.db import A2AAgent as DbA2AAgent
 from mcpgateway.db import EmailTeam
@@ -45,14 +49,21 @@ from mcpgateway.db import Gateway as DbGateway
 from mcpgateway.db import server_tool_association
 from mcpgateway.db import Tool as DbTool
 from mcpgateway.db import ToolMetric
-from mcpgateway.models import Gateway as PydanticGateway
-from mcpgateway.models import TextContent
-from mcpgateway.models import Tool as PydanticTool
-from mcpgateway.models import ToolResult
 from mcpgateway.observability import create_span
-from mcpgateway.plugins.framework import GlobalContext, HttpHeaderPayload, PluginError, PluginManager, PluginViolationError, ToolPostInvokePayload, ToolPreInvokePayload
+from mcpgateway.plugins.framework import (
+    GlobalContext,
+    HttpHeaderPayload,
+    PluginContextTable,
+    PluginError,
+    PluginManager,
+    PluginViolationError,
+    ToolHookType,
+    ToolPostInvokePayload,
+    ToolPreInvokePayload,
+)
 from mcpgateway.plugins.framework.constants import GATEWAY_METADATA, TOOL_METADATA
 from mcpgateway.schemas import ToolCreate, ToolRead, ToolUpdate, TopPerformer
+from mcpgateway.services.event_service import EventService
 from mcpgateway.services.logging_service import LoggingService
 from mcpgateway.services.oauth_manager import OAuthManager
 from mcpgateway.services.team_management_service import TeamManagementService
@@ -64,6 +75,7 @@ from mcpgateway.utils.passthrough_headers import get_passthrough_headers
 from mcpgateway.utils.retry_manager import ResilientHttpClient
 from mcpgateway.utils.services_auth import decode_auth
 from mcpgateway.utils.sqlalchemy_modifier import json_contains_expr
+from mcpgateway.utils.validate_signature import validate_signature
 
 # Initialize logging service first
 logging_service = LoggingService()
@@ -230,14 +242,12 @@ class ToolService:
         Examples:
             >>> from mcpgateway.services.tool_service import ToolService
             >>> service = ToolService()
-            >>> isinstance(service._event_subscribers, list)
+            >>> isinstance(service._event_service, EventService)
             True
-            >>> len(service._event_subscribers)
-            0
             >>> hasattr(service, '_http_client')
             True
         """
-        self._event_subscribers: List[asyncio.Queue] = []
+        self._event_service = EventService(channel_name="mcpgateway:tool_events")
         self._http_client = ResilientHttpClient(client_args={"timeout": settings.federation_timeout, "verify": not settings.skip_ssl_verify})
         # Initialize plugin manager with env overrides to ease testing
         env_flag = os.getenv("PLUGINS_ENABLED")
@@ -274,6 +284,7 @@ class ToolService:
             >>> asyncio.run(service.shutdown())  # Should log "Tool service shutdown complete"
         """
         await self._http_client.aclose()
+        await self._event_service.shutdown()
         logger.info("Tool service shutdown complete")
 
     async def get_top_tools(self, db: Session, limit: Optional[int] = 5) -> List[TopPerformer]:
@@ -338,20 +349,27 @@ class ToolService:
         team = db.query(EmailTeam).filter(EmailTeam.id == team_id, EmailTeam.is_active.is_(True)).first()
         return team.name if team else None
 
-    def _convert_tool_to_read(self, tool: DbTool) -> ToolRead:
+    def _convert_tool_to_read(self, tool: DbTool, include_metrics: bool = True) -> ToolRead:
         """Converts a DbTool instance into a ToolRead model, including aggregated metrics and
         new API gateway fields: request_type and authentication credentials (masked).
 
         Args:
             tool (DbTool): The ORM instance of the tool.
+            include_metrics (bool): Whether to include metrics in the result. Defaults to True.
 
         Returns:
             ToolRead: The Pydantic model representing the tool, including aggregated metrics and new fields.
         """
         tool_dict = tool.__dict__.copy()
         tool_dict.pop("_sa_instance_state", None)
+
+        if include_metrics:
+            tool_dict["metrics"] = tool.metrics_summary
+        else:
+            tool_dict["metrics"] = None
+
         tool_dict["execution_count"] = tool.execution_count
-        tool_dict["metrics"] = tool.metrics_summary
+
         tool_dict["request_type"] = tool.request_type
         tool_dict["annotations"] = tool.annotations or {}
 
@@ -444,7 +462,7 @@ class ToolService:
 
         Examples:
                 >>> from mcpgateway.services.tool_service import ToolService
-                >>> from mcpgateway.models import TextContent, ToolResult
+                >>> from mcpgateway.common.models import TextContent, ToolResult
                 >>> import json
                 >>> service = ToolService()
                 >>> # No schema declared -> nothing to validate
@@ -789,7 +807,9 @@ class ToolService:
 
         return (result, next_cursor)
 
-    async def list_server_tools(self, db: Session, server_id: str, include_inactive: bool = False, cursor: Optional[str] = None, _request_headers: Optional[Dict[str, str]] = None) -> List[ToolRead]:
+    async def list_server_tools(
+        self, db: Session, server_id: str, include_inactive: bool = False, include_metrics: bool = False, cursor: Optional[str] = None, _request_headers: Optional[Dict[str, str]] = None
+    ) -> List[ToolRead]:
         """
         Retrieve a list of registered tools from the database.
 
@@ -797,6 +817,8 @@ class ToolService:
             db (Session): The SQLAlchemy database session.
             server_id (str): Server ID
             include_inactive (bool): If True, include inactive tools in the result.
+                Defaults to False.
+            include_metrics (bool): If True, all tool metrics included in result otherwise null.
                 Defaults to False.
             cursor (Optional[str], optional): An opaque cursor token for pagination. Currently,
                 this parameter is ignored. Defaults to None.
@@ -819,17 +841,33 @@ class ToolService:
             >>> isinstance(result, list)
             True
         """
-        query = select(DbTool).join(server_tool_association, DbTool.id == server_tool_association.c.tool_id).where(server_tool_association.c.server_id == server_id)
+
+        query = select(DbTool).options(joinedload(DbTool.gateway)).join(server_tool_association, DbTool.id == server_tool_association.c.tool_id).where(server_tool_association.c.server_id == server_id)
         cursor = None  # Placeholder for pagination; ignore for now
         logger.debug(f"Listing server tools for server_id={server_id} with include_inactive={include_inactive}, cursor={cursor}")
+
         if not include_inactive:
             query = query.where(DbTool.enabled)
+
+        # Execute the query and retrieve tools
         tools = db.execute(query).scalars().all()
+
+        team_ids = {getattr(t, "team_id", None) for t in tools if getattr(t, "team_id", None)}
+
+        # If there are team_ids, fetch all corresponding team names at once
+        if team_ids:
+            teams = db.query(EmailTeam.id, EmailTeam.name).filter(EmailTeam.id.in_(team_ids), EmailTeam.is_active.is_(True)).all()
+            team_name_map = {team.id: team.name for team in teams}
+        else:
+            team_name_map = {}
+
+        # Add team names to tools based on the map
         result = []
         for t in tools:
-            team_name = self._get_team_name(db, getattr(t, "team_id", None))
+            team_name = team_name_map.get(getattr(t, "team_id", None))
             t.team = team_name
-            result.append(self._convert_tool_to_read(t))
+            result.append(self._convert_tool_to_read(t, include_metrics=include_metrics))
+
         return result
 
     async def list_tools_for_user(
@@ -1062,10 +1100,17 @@ class ToolService:
 
                 db.commit()
                 db.refresh(tool)
-                if activate:
-                    await self._notify_tool_activated(tool)
-                else:
+
+                if not tool.enabled:
+                    # Inactive
                     await self._notify_tool_deactivated(tool)
+                elif tool.enabled and not tool.reachable:
+                    # Offline
+                    await self._notify_tool_offline(tool)
+                else:
+                    # Active
+                    await self._notify_tool_activated(tool)
+
                 logger.info(f"Tool: {tool.name} is {'enabled' if activate else 'disabled'}{' and accessible' if reachable else ' but inaccessible'}")
             return self._convert_tool_to_read(tool)
         except PermissionError as e:
@@ -1074,7 +1119,16 @@ class ToolService:
             db.rollback()
             raise ToolError(f"Failed to toggle tool status: {str(e)}")
 
-    async def invoke_tool(self, db: Session, name: str, arguments: Dict[str, Any], request_headers: Optional[Dict[str, str]] = None, app_user_email: Optional[str] = None) -> ToolResult:
+    async def invoke_tool(
+        self,
+        db: Session,
+        name: str,
+        arguments: Dict[str, Any],
+        request_headers: Optional[Dict[str, str]] = None,
+        app_user_email: Optional[str] = None,
+        plugin_context_table: Optional[PluginContextTable] = None,
+        plugin_global_context: Optional[GlobalContext] = None,
+    ) -> ToolResult:
         """
         Invoke a registered tool and record execution metrics.
 
@@ -1086,6 +1140,8 @@ class ToolService:
                 Defaults to None.
             app_user_email (Optional[str], optional): MCP Gateway user email for OAuth token retrieval.
                 Required for OAuth-protected gateways.
+            plugin_context_table: Optional plugin context table from previous hooks for cross-hook state sharing.
+            plugin_global_context: Optional global context from middleware for consistency across hooks.
 
         Returns:
             Tool invocation result.
@@ -1128,12 +1184,22 @@ class ToolService:
             return await self._invoke_a2a_tool(db=db, tool=tool, arguments=arguments)
 
         # Plugin hook: tool pre-invoke
-        context_table = None
-        request_id = uuid.uuid4().hex
-        # Use gateway_id if available, otherwise use a generic server identifier
-        gateway_id = getattr(tool, "gateway_id", "unknown")
-        server_id = gateway_id if isinstance(gateway_id, str) else "unknown"
-        global_context = GlobalContext(request_id=request_id, server_id=server_id, tenant_id=None)
+        # Use existing context_table from previous hooks if available
+        context_table = plugin_context_table
+
+        # Reuse existing global_context from middleware or create new one
+        if plugin_global_context:
+            global_context = plugin_global_context
+            # Update server_id if we have better information
+            gateway_id = getattr(tool, "gateway_id", None)
+            if gateway_id and isinstance(gateway_id, str):
+                global_context.server_id = gateway_id
+        else:
+            # Create new context (fallback when middleware didn't run)
+            request_id = uuid.uuid4().hex
+            gateway_id = getattr(tool, "gateway_id", "unknown")
+            server_id = gateway_id if isinstance(gateway_id, str) else "unknown"
+            global_context = GlobalContext(request_id=request_id, server_id=server_id, tenant_id=None, user=app_user_email)
 
         start_time = time.monotonic()
         success = False
@@ -1177,10 +1243,11 @@ class ToolService:
                     if self._plugin_manager:
                         tool_metadata = PydanticTool.model_validate(tool)
                         global_context.metadata[TOOL_METADATA] = tool_metadata
-                        pre_result, context_table = await self._plugin_manager.tool_pre_invoke(
-                            payload=ToolPreInvokePayload(name=name, args=arguments, headers=HttpHeaderPayload(headers)),
+                        pre_result, context_table = await self._plugin_manager.invoke_hook(
+                            ToolHookType.TOOL_PRE_INVOKE,
+                            payload=ToolPreInvokePayload(name=name, args=arguments, headers=HttpHeaderPayload(root=headers)),
                             global_context=global_context,
-                            local_contexts=None,
+                            local_contexts=context_table,  # Pass context from previous hooks
                             violations_as_exceptions=True,
                         )
                         if pre_result.modified_payload:
@@ -1237,18 +1304,18 @@ class ToolService:
                         # Don't mark as successful for error responses - success remains False
                     else:
                         result = response.json()
+                        logger.debug(f"REST API tool response: {result}")
                         filtered_response = extract_using_jq(result, tool.jsonpath_filter)
                         tool_result = ToolResult(content=[TextContent(type="text", text=json.dumps(filtered_response, indent=2))])
                         success = True
-
                         # If output schema is present, validate and attach structured content
                         if getattr(tool, "output_schema", None):
                             valid = self._extract_and_validate_structured_content(tool, tool_result, candidate=filtered_response)
                             success = bool(valid)
-
                 elif tool.integration_type == "MCP":
                     transport = tool.request_type.lower()
-                    gateway = db.execute(select(DbGateway).where(DbGateway.id == tool.gateway_id).where(DbGateway.enabled)).scalar_one_or_none()
+                    # gateway = db.execute(select(DbGateway).where(DbGateway.id == tool.gateway_id).where(DbGateway.enabled)).scalar_one_or_none()
+                    gateway = tool.gateway
 
                     # Handle OAuth authentication for the gateway
                     if gateway and gateway.auth_type == "oauth" and gateway.oauth_config:
@@ -1291,6 +1358,56 @@ class ToolService:
                     if request_headers:
                         headers = get_passthrough_headers(request_headers, headers, db, gateway)
 
+                    def create_ssl_context(ca_certificate: str) -> ssl.SSLContext:
+                        """Create an SSL context with the provided CA certificate.
+
+                        Args:
+                            ca_certificate: CA certificate in PEM format
+
+                        Returns:
+                            ssl.SSLContext: Configured SSL context
+                        """
+                        ctx = ssl.create_default_context()
+                        ctx.load_verify_locations(cadata=ca_certificate)
+                        return ctx
+
+                    def get_httpx_client_factory(
+                        headers: dict[str, str] | None = None,
+                        timeout: httpx.Timeout | None = None,
+                        auth: httpx.Auth | None = None,
+                    ) -> httpx.AsyncClient:
+                        """Factory function to create httpx.AsyncClient with optional CA certificate.
+
+                        Args:
+                            headers: Optional headers for the client
+                            timeout: Optional timeout for the client
+                            auth: Optional auth for the client
+
+                        Returns:
+                            httpx.AsyncClient: Configured HTTPX async client
+
+                        Raises:
+                            Exception: If CA certificate signature is invalid
+                        """
+                        valid = False
+                        if gateway.ca_certificate:
+                            if settings.enable_ed25519_signing:
+                                public_key_pem = settings.ed25519_public_key
+                                valid = validate_signature(gateway.ca_certificate.encode(), gateway.ca_certificate_sig, public_key_pem)
+                            else:
+                                valid = True
+                        if valid:
+                            ctx = create_ssl_context(gateway.ca_certificate)
+                        else:
+                            ctx = None
+                        return httpx.AsyncClient(
+                            verify=ctx if ctx else True,
+                            follow_redirects=True,
+                            headers=headers,
+                            timeout=timeout or httpx.Timeout(30.0),
+                            auth=auth,
+                        )
+
                     async def connect_to_sse_server(server_url: str, headers: dict = headers):
                         """Connect to an MCP server running with SSE transport.
 
@@ -1301,7 +1418,7 @@ class ToolService:
                         Returns:
                             ToolResult: Result of tool call
                         """
-                        async with sse_client(url=server_url, headers=headers) as streams:
+                        async with sse_client(url=server_url, headers=headers, httpx_client_factory=get_httpx_client_factory) as streams:
                             async with ClientSession(*streams) as session:
                                 await session.initialize()
                                 tool_call_result = await session.call_tool(tool.original_name, arguments)
@@ -1317,7 +1434,7 @@ class ToolService:
                         Returns:
                             ToolResult: Result of tool call
                         """
-                        async with streamablehttp_client(url=server_url, headers=headers) as (read_stream, write_stream, _get_session_id):
+                        async with streamablehttp_client(url=server_url, headers=headers, httpx_client_factory=get_httpx_client_factory) as (read_stream, write_stream, _get_session_id):
                             async with ClientSession(read_stream, write_stream) as session:
                                 await session.initialize()
                                 tool_call_result = await session.call_tool(tool.original_name, arguments)
@@ -1332,8 +1449,9 @@ class ToolService:
                         if tool_gateway:
                             gateway_metadata = PydanticGateway.model_validate(tool_gateway)
                             global_context.metadata[GATEWAY_METADATA] = gateway_metadata
-                        pre_result, context_table = await self._plugin_manager.tool_pre_invoke(
-                            payload=ToolPreInvokePayload(name=name, args=arguments, headers=HttpHeaderPayload(headers)),
+                        pre_result, context_table = await self._plugin_manager.invoke_hook(
+                            ToolHookType.TOOL_PRE_INVOKE,
+                            payload=ToolPreInvokePayload(name=name, args=arguments, headers=HttpHeaderPayload(root=headers)),
                             global_context=global_context,
                             local_contexts=None,
                             violations_as_exceptions=True,
@@ -1350,21 +1468,26 @@ class ToolService:
                         tool_call_result = await connect_to_sse_server(tool_gateway.url, headers=headers)
                     elif transport == "streamablehttp":
                         tool_call_result = await connect_to_streamablehttp_server(tool_gateway.url, headers=headers)
-                    content = tool_call_result.model_dump(by_alias=True).get("content", [])
-
+                    dump = tool_call_result.model_dump(by_alias=True)
+                    logger.debug(f"Tool call result dump: {dump}")
+                    content = dump.get("content", [])
+                    # Accept both alias and pythonic names for structured content
+                    structured = dump.get("structuredContent") or dump.get("structured_content")
                     filtered_response = extract_using_jq(content, tool.jsonpath_filter)
-                    tool_result = ToolResult(content=filtered_response)
-                    success = True
-                    # If output schema is present, validate and attach structured content
-                    if getattr(tool, "output_schema", None):
-                        valid = self._extract_and_validate_structured_content(tool, tool_result, candidate=filtered_response)
-                        success = bool(valid)
+
+                    is_err = getattr(tool_call_result, "is_error", None)
+                    if is_err is None:
+                        is_err = getattr(tool_call_result, "isError", False)
+                    tool_result = ToolResult(content=filtered_response, structured_content=structured, is_error=is_err, meta=getattr(tool_call_result, "meta", None))
+                    success = not is_err
+                    logger.debug(f"Final tool_result: {tool_result}")
                 else:
-                    tool_result = ToolResult(content=[TextContent(type="text", text="Invalid tool type")])
+                    tool_result = ToolResult(content=[TextContent(type="text", text="Invalid tool type")], is_error=True)
 
                 # Plugin hook: tool post-invoke
                 if self._plugin_manager:
-                    post_result, _ = await self._plugin_manager.tool_post_invoke(
+                    post_result, _ = await self._plugin_manager.invoke_hook(
+                        ToolHookType.TOOL_POST_INVOKE,
                         payload=ToolPostInvokePayload(name=name, result=tool_result.model_dump(by_alias=True)),
                         global_context=global_context,
                         local_contexts=context_table,
@@ -1375,7 +1498,11 @@ class ToolService:
                         # Reconstruct ToolResult from modified result
                         modified_result = post_result.modified_payload.result
                         if isinstance(modified_result, dict) and "content" in modified_result:
-                            tool_result = ToolResult(content=modified_result["content"])
+                            # Safely obtain structured content using .get() to avoid KeyError when
+                            # plugins provide only the content without structured content fields.
+                            structured = modified_result.get("structuredContent") if "structuredContent" in modified_result else modified_result.get("structured_content")
+
+                            tool_result = ToolResult(content=modified_result["content"], structured_content=structured)
                         else:
                             # If result is not in expected format, convert it to text content
                             tool_result = ToolResult(content=[TextContent(type="text", text=str(modified_result))])
@@ -1478,6 +1605,9 @@ class ToolService:
                     ).scalar_one_or_none()
                     if existing_tool:
                         raise ToolNameConflictError(existing_tool.custom_name, enabled=existing_tool.enabled, tool_id=existing_tool.id, visibility=existing_tool.visibility)
+                if tool_update.custom_name is None and tool.name == tool.custom_name:
+                    tool.custom_name = tool_update.name
+                tool.name = tool_update.name
 
             if tool_update.custom_name is not None:
                 tool.custom_name = tool_update.custom_name
@@ -1581,7 +1711,7 @@ class ToolService:
         """
         event = {
             "type": "tool_activated",
-            "data": {"id": tool.id, "name": tool.name, "enabled": tool.enabled},
+            "data": {"id": tool.id, "name": tool.name, "enabled": tool.enabled, "reachable": tool.reachable},
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         await self._publish_event(event)
@@ -1595,7 +1725,26 @@ class ToolService:
         """
         event = {
             "type": "tool_deactivated",
-            "data": {"id": tool.id, "name": tool.name, "enabled": tool.enabled},
+            "data": {"id": tool.id, "name": tool.name, "enabled": tool.enabled, "reachable": tool.reachable},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        await self._publish_event(event)
+
+    async def _notify_tool_offline(self, tool: DbTool) -> None:
+        """
+        Notify subscribers that tool is offline.
+
+        Args:
+            tool: Tool database object
+        """
+        event = {
+            "type": "tool_offline",
+            "data": {
+                "id": tool.id,
+                "name": tool.name,
+                "enabled": True,
+                "reachable": False,
+            },
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         await self._publish_event(event)
@@ -1615,19 +1764,13 @@ class ToolService:
         await self._publish_event(event)
 
     async def subscribe_events(self) -> AsyncGenerator[Dict[str, Any], None]:
-        """Subscribe to tool events.
+        """Subscribe to tool events via the EventService.
 
         Yields:
             Tool event messages.
         """
-        queue: asyncio.Queue = asyncio.Queue()
-        self._event_subscribers.append(queue)
-        try:
-            while True:
-                event = await queue.get()
-                yield event
-        finally:
-            self._event_subscribers.remove(queue)
+        async for event in self._event_service.subscribe_events():
+            yield event
 
     async def _notify_tool_added(self, tool: DbTool) -> None:
         """
@@ -1665,13 +1808,12 @@ class ToolService:
 
     async def _publish_event(self, event: Dict[str, Any]) -> None:
         """
-        Publish event to all subscribers.
+        Publish event to all subscribers via the EventService.
 
         Args:
             event: Event to publish
         """
-        for queue in self._event_subscribers:
-            await queue.put(event)
+        await self._event_service.publish_event(event)
 
     async def _validate_tool_url(self, url: str) -> None:
         """Validate tool URL is accessible.
@@ -1703,20 +1845,20 @@ class ToolService:
         except Exception:
             return False
 
-    async def event_generator(self) -> AsyncGenerator[Dict[str, Any], None]:
-        """Generate tool events for SSE.
+    # async def event_generator(self) -> AsyncGenerator[Dict[str, Any], None]:
+    #     """Generate tool events for SSE.
 
-        Yields:
-            Tool events.
-        """
-        queue: asyncio.Queue = asyncio.Queue()
-        self._event_subscribers.append(queue)
-        try:
-            while True:
-                event = await queue.get()
-                yield event
-        finally:
-            self._event_subscribers.remove(queue)
+    #     Yields:
+    #         Tool events.
+    #     """
+    #     queue: asyncio.Queue = asyncio.Queue()
+    #     self._event_subscribers.append(queue)
+    #     try:
+    #         while True:
+    #             event = await queue.get()
+    #             yield event
+    #     finally:
+    #         self._event_subscribers.remove(queue)
 
     # --- Metrics ---
     async def aggregate_metrics(self, db: Session) -> Dict[str, Any]:

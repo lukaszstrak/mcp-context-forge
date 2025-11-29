@@ -16,7 +16,7 @@ It includes:
   - Capability definitions
 
 Examples:
-    >>> from mcpgateway.models import Role, LogLevel, TextContent
+    >>> from mcpgateway.common.models import Role, LogLevel, TextContent
     >>> Role.USER.value
     'user'
     >>> Role.ASSISTANT.value
@@ -715,11 +715,14 @@ class ResourceTemplate(BaseModelWithConfigDict):
                                         Serialized as '_meta' in JSON.
     """
 
-    uri_template: str
+    # ✅ DB field name: uri_template
+    # ✅ API (JSON) alias:
+    id: Optional[int] = None
+    uri_template: str = Field(..., alias="uriTemplate")
     name: str
     description: Optional[str] = None
     mime_type: Optional[str] = None
-    annotations: Optional[Annotations] = None
+    annotations: Optional[Dict[str, Any]] = None
     meta: Optional[Dict[str, Any]] = Field(None, alias="_meta")
 
 
@@ -1360,3 +1363,20 @@ class PermissionAudit(BaseModel):
 
 # Permission constants are imported from db.py to avoid duplication
 # Use Permissions class from mcpgateway.db instead of duplicate SystemPermissions
+
+
+class TransportType(str, Enum):
+    """
+    Enumeration of supported transport mechanisms for communication between components.
+
+    Attributes:
+        SSE (str): Server-Sent Events transport.
+        HTTP (str): Standard HTTP-based transport.
+        STDIO (str): Standard input/output transport.
+        STREAMABLEHTTP (str): HTTP transport with streaming.
+    """
+
+    SSE = "SSE"
+    HTTP = "HTTP"
+    STDIO = "STDIO"
+    STREAMABLEHTTP = "STREAMABLEHTTP"

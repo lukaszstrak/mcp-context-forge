@@ -8,7 +8,10 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - FastMCP Implementation
 """
 
+# Future
 from __future__ import annotations
+
+# Standard
 from typing import Tuple
 
 # Supported analysis types
@@ -18,25 +21,29 @@ SUPPORTED_ANALYSIS_TYPES = {"general", "detailed", "objects", "scene", "text"}
 # to match the local models you have pulled into Ollama.
 MODEL_ALIASES_OLLAMA = {
     # Logical Granite default -> pick a strong vision model available in Ollama
-    "granite-vision-general-v1": "qwen2.5-vl:latest",  # fallback alias
-    # Add more aliases or pass-throughs here if you have exact model tags
-    # "granite-vision-detailed-v1": "llava:latest",
+    "granite-vision-general-v1": "granite3.3-vision:2b",
+    "granite-vision-document-v1": "granite3.3-vision:2b",
+    "granite-vision-ocr-v1": "granite3.3-vision:2b",
+    "granite-vision-chart-v1": "granite3.3-vision:2b",
+    "granite-vision-table-v1": "granite3.3-vision:2b",
+    "granite-multimodal-8b": "granite3.3-vision:2b",
 }
 
 
 def resolve_model_for_provider(model: str, provider: str) -> str:
     if provider != "ollama":
         raise ValueError(f"Unsupported provider: {provider}")
-    # Pass-through if caller already gave a valid Ollama tag
-    if ":" in model or model in ("llava", "qwen2.5-vl", "phi3.5-vision", "gemma2:vision"):
+    # Pass-through if caller already gave a valid Ollama tag with colon
+    if ":" in model:
         return model
-    return MODEL_ALIASES_OLLAMA.get(model, model)
+    # Check if it's a known Granite model alias
+    if model in MODEL_ALIASES_OLLAMA:
+        return MODEL_ALIASES_OLLAMA[model]
+    # Pass through unknown models as-is
+    return model
 
 
-SYSTEM_PROMPT_TEMPLATE = (
-    "You are a meticulous, multilingual computer vision analyst. "
-    "Always return **only** strict JSON. No prose, no markdown."
-)
+SYSTEM_PROMPT_TEMPLATE = "You are a meticulous, multilingual computer vision analyst. " "Always return **only** strict JSON. No prose, no markdown."
 
 USER_PROMPT_TEMPLATE = (
     "You are given an image. Perform a {analysis_label} analysis and respond in JSON with keys: "

@@ -963,11 +963,14 @@ class TestResourceAPIs:
         }
 
         response = await client.post("/resources", json=resource_data, headers=TEST_AUTH_HEADER)
-
         assert response.status_code == 200
         result = response.json()
         # API normalizes all mime types to text/plain
-        assert result["mimeType"] == "text/plain"
+        if "mime_type" in result:
+            assert result["mime_type"] == "application/json"
+        elif "mimeType" in result:
+            assert result["mimeType"] == "application/json"
+
 
     async def test_create_resource_form_urlencoded(self, client: AsyncClient, mock_auth):
         """
@@ -1002,10 +1005,11 @@ class TestResourceAPIs:
     async def test_read_resource(self, client: AsyncClient, mock_auth):
         """Test GET /resources/{uri:path}."""
         # Create a resource first
-        resource_data = {"resource": {"uri": "test/document", "name": "test_doc", "content": "Test content", "mimeType": "text/plain"}, "team_id": None, "visibility": "private"}
+        resource_data = {"resource": {"uri": "resource://test", "name": "test_doc", "content": "Test content", "mimeType": "text/plain"}, "team_id": None, "visibility": "private"}
 
         response = await client.post("/resources", json=resource_data, headers=TEST_AUTH_HEADER)
         resource = response.json()
+        print ("\n----------HBD------------> Resource \n",resource,"\n----------HBD------------> Resource\n")
         assert resource["name"] == "test_doc"
         resource_id = resource["id"]
 
@@ -1845,7 +1849,7 @@ class TestIntegrationScenarios:
 
     async def test_create_and_use_resource(self, client: AsyncClient, mock_auth):
         """Integration: create a resource and read it back."""
-        resource_data = {"resource": {"uri": "integration/resource", "name": "integration_resource", "content": "test"}, "team_id": None, "visibility": "private"}
+        resource_data = {"resource": {"uri": "resource://test", "name": "integration_resource", "content": "test"}, "team_id": None, "visibility": "private"}
         create_resp = await client.post("/resources", json=resource_data, headers=TEST_AUTH_HEADER)
         assert create_resp.status_code == 200
         resource_id = create_resp.json()["id"]

@@ -7,17 +7,16 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 
 Granite Vision MCP Server - FastMCP Implementation
 """
+# Future
 from __future__ import annotations
 
-from ..models.granite_vision_models import (
-    resolve_model_for_provider,
-    build_prompts
-)
+# Local
+from ..models.granite_vision_models import build_prompts, resolve_model_for_provider
 from ..providers.ollama_vision import OllamaVisionClient
-from ..utils.image_utils import ensure_base64
-from ..utils.format_converters import normalize_response
-from ..utils.validations import validate_request
 from ..tools.image_analysis import ImageAnalysisRequest
+from ..utils.format_converters import normalize_response
+from ..utils.image_utils import ensure_base64
+from ..utils.validations import validate_request
 
 
 async def process_image_analysis(req: ImageAnalysisRequest):

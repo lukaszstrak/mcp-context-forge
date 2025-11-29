@@ -15,6 +15,7 @@ functions for protecting routes.
 from functools import wraps
 import logging
 from typing import Callable, Generator, List, Optional
+import uuid
 
 # Third-Party
 from fastapi import Cookie, Depends, HTTPException, Request, status
@@ -117,6 +118,21 @@ async def get_current_user_with_permissions(
         is_htmx = request.headers.get("hx-request") == "true"
         if "text/html" in accept_header or is_htmx:
             raise HTTPException(status_code=status.HTTP_302_FOUND, detail="Authentication required", headers={"Location": f"{settings.app_root_path}/admin/login"})
+
+        # If auth is disabled, return the stock admin user
+        if not settings.auth_required:
+            return {
+                "email": settings.platform_admin_email,
+                "full_name": "Platform Admin",
+                "is_admin": True,
+                "ip_address": request.client.host if request.client else None,
+                "user_agent": request.headers.get("user-agent"),
+                "db": db,
+                "auth_method": "disabled",
+                "request_id": getattr(request.state, "request_id", None),
+                "team_id": getattr(request.state, "team_id", None),
+            }
+
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authorization token required")
 
     try:
@@ -125,7 +141,19 @@ async def get_current_user_with_permissions(
             credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token)
 
         # Extract user from token using the email auth function
-        user = await get_current_user(credentials, db)
+        # Pass request to get_current_user so plugins can store auth_method in request.state
+        user = await get_current_user(credentials, db, request=request)
+
+        # Read auth_method and request_id from request.state
+        # (auth_method set by plugin in get_current_user, request_id set by HTTP middleware)
+        auth_method = getattr(request.state, "auth_method", None)
+        request_id = getattr(request.state, "request_id", None)
+        team_id = getattr(request.state, "team_id", None)
+
+        # Read plugin context data from request.state for cross-hook context sharing
+        # (set by HttpAuthMiddleware for passing contexts between different hook types)
+        plugin_context_table = getattr(request.state, "plugin_context_table", None)
+        plugin_global_context = getattr(request.state, "plugin_global_context", None)
 
         # Add request context for permission auditing
         return {
@@ -135,6 +163,11 @@ async def get_current_user_with_permissions(
             "ip_address": request.client.host if request.client else None,
             "user_agent": request.headers.get("user-agent"),
             "db": db,
+            "auth_method": auth_method,  # Include auth_method from plugin
+            "request_id": request_id,  # Include request_id from middleware
+            "team_id": team_id,  # Include team_id from token
+            "plugin_context_table": plugin_context_table,  # Plugin contexts for cross-hook sharing
+            "plugin_global_context": plugin_global_context,  # Global context for consistency
         }
     except Exception as e:
         logger.error(f"Authentication failed: {type(e).__name__}: {e}")
@@ -219,7 +252,63 @@ def require_permission(permission: str, resource_type: Optional[str] = None):
             # Extract team_id from path parameters if available
             team_id = kwargs.get("team_id")
 
-            # Check permission
+            # First, check if any plugins want to handle permission checking
+            # First-Party
+            from mcpgateway.plugins.framework import (  # pylint: disable=import-outside-toplevel
+                get_plugin_manager,
+                GlobalContext,
+                HttpAuthCheckPermissionPayload,
+                HttpHookType,
+            )
+
+            plugin_manager = get_plugin_manager()
+            if plugin_manager:
+                # Get plugin contexts from user_context (stored in request.state by HttpAuthMiddleware)
+                # These enable cross-hook context sharing between HTTP_PRE_REQUEST and HTTP_AUTH_CHECK_PERMISSION
+                plugin_context_table = user_context.get("plugin_context_table")
+                plugin_global_context = user_context.get("plugin_global_context")
+
+                # Reuse existing global context from middleware if available for consistency
+                # Otherwise create a new one (fallback for cases where middleware didn't run)
+                if plugin_global_context:
+                    global_context = plugin_global_context
+                else:
+                    request_id = user_context.get("request_id") or uuid.uuid4().hex
+                    global_context = GlobalContext(
+                        request_id=request_id,
+                        server_id=None,
+                        tenant_id=None,
+                    )
+
+                # Invoke permission check hook, passing plugin contexts from HTTP_PRE_REQUEST hook
+                result, _ = await plugin_manager.invoke_hook(
+                    HttpHookType.HTTP_AUTH_CHECK_PERMISSION,
+                    payload=HttpAuthCheckPermissionPayload(
+                        user_email=user_context["email"],
+                        permission=permission,
+                        resource_type=resource_type,
+                        team_id=team_id,
+                        is_admin=user_context.get("is_admin", False),
+                        auth_method=user_context.get("auth_method"),
+                        client_host=user_context.get("ip_address"),
+                        user_agent=user_context.get("user_agent"),
+                    ),
+                    global_context=global_context,
+                    local_contexts=plugin_context_table,  # Pass context table for cross-hook state
+                )
+
+                # If a plugin made a decision, respect it
+                if result and result.modified_payload:
+                    if result.modified_payload.granted:
+                        logger.info(f"Permission granted by plugin: user={user_context['email']}, " f"permission={permission}, reason={result.modified_payload.reason}")
+                        return await func(*args, **kwargs)
+                    logger.warning(f"Permission denied by plugin: user={user_context['email']}, " f"permission={permission}, reason={result.modified_payload.reason}")
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=f"Insufficient permissions. Required: {permission}",
+                    )
+
+            # No plugin handled it, fall through to standard RBAC check
             granted = await permission_service.check_permission(
                 user_email=user_context["email"],
                 permission=permission,

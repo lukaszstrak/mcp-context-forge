@@ -7,15 +7,18 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - FastMCP Implementation
 
 """
+# Standard
 import logging
 import sys
 from typing import Any, Dict
 
+# Third-Party
 from fastmcp import FastMCP
 from pydantic import Field
 
-from .tools.image_analysis import ImageAnalysisRequest
+# Local
 from .processing.image_processor import process_image_analysis
+from .tools.image_analysis import ImageAnalysisRequest
 
 # Configure logging to stderr to avoid MCP protocol interference
 logging.basicConfig(
@@ -37,9 +40,9 @@ async def analyze_image(
     analysis_type: str = Field("general", description="general, detailed, objects, scene, text"),
     include_confidence: bool = Field(True, description="Whether to include confidence scores in the output"),
     max_description_length: int = Field(200, description="Maximum length of the description"),
-    language: str = Field("en", description="Language for the output")
+    language: str = Field("en", description="Language for the output"),
 ) -> Dict[str, Any]:
-    
+
     # Placeholder implementation
     logger.info(f"Analyzing image with model {model} from provider {provider}")
 
@@ -53,10 +56,12 @@ async def analyze_image(
         language=language,
     )
 
-    return await process_image_analysis(req)    
+    return await process_image_analysis(req)
+
 
 def main():
     """Main entry point for the FastMCP server."""
+    # Standard
     import argparse
 
     parser = argparse.ArgumentParser(description="Granite Vision MCP Server")

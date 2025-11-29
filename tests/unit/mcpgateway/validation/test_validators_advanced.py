@@ -27,7 +27,7 @@ from unittest.mock import patch
 import pytest
 
 # First-Party
-from mcpgateway.validators import SecurityValidator
+from mcpgateway.common.validators import SecurityValidator
 
 
 class DummySettings:
@@ -56,7 +56,7 @@ class DummySettings:
     # Character validation patterns
     validation_name_pattern = r"^[a-zA-Z0-9_.\-\s]+$"  # Names can have spaces
     validation_identifier_pattern = r"^[a-zA-Z0-9_\-\.]+$"  # IDs cannot have spaces
-    validation_safe_uri_pattern = r"^[a-zA-Z0-9_\-.:/?=&%]+$"
+    validation_safe_uri_pattern = r"^[a-zA-Z0-9_\-.:/?=&%{}]+$"
     validation_unsafe_uri_pattern = r'[<>"\'\\]'
     validation_tool_name_pattern = r"^[a-zA-Z][a-zA-Z0-9._-]*$"  # Must start with letter
 
@@ -84,7 +84,7 @@ def patch_logger(monkeypatch):
 
             return logfn
 
-    monkeypatch.setattr("mcpgateway.validators.logger", DummyLogger())
+    monkeypatch.setattr("mcpgateway.common.validators.logger", DummyLogger())
     yield logs
 
 

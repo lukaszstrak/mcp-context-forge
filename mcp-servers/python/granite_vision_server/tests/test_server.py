@@ -7,9 +7,11 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Tests for DOCX MCP Server (FastMCP).
 """
 
-import tempfile
+# Standard
 from pathlib import Path
+import tempfile
 
+# Third-Party
 from granite_vision_server.server_fastmcp import doc_ops
 
 
@@ -100,9 +102,7 @@ def test_format_text():
         doc_ops.create_document(file_path)
         doc_ops.add_text(file_path, "Text to format")
 
-        result = doc_ops.format_text(
-            file_path, paragraph_index=0, run_index=0, bold=True, italic=True
-        )
+        result = doc_ops.format_text(file_path, paragraph_index=0, run_index=0, bold=True, italic=True)
 
         assert result["success"] is True
 

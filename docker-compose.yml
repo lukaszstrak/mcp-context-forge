@@ -9,6 +9,7 @@ networks:
 
 volumes:                # Named volumes survive podman-compose down/up
   pgdata:
+  # pgdata18:  # Enable for postgres 18+
   mariadbdata:
   mysqldata:
   mongodata:
@@ -51,11 +52,11 @@ services:
   # ──────────────────────────────────────────────────────────────────────
   gateway:
     image: ${IMAGE_LOCAL:-mcpgateway/mcpgateway:latest} # Use the local latest image. Run `make docker-prod` to build it.
-    #image: ghcr.io/ibm/mcp-context-forge:0.8.0 # Use the release MCP Context Forge image
+    #image: ghcr.io/ibm/mcp-context-forge:0.9.0 # Use the release MCP Context Forge image
     #image: ghcr.io/ibm/mcp-context-forge:0.7.0 # Testing migration from 0.7.0
     build:
       context: .
-      dockerfile: Containerfile     # Same one the Makefile builds
+      dockerfile: Containerfile.lite     # Same one the Makefile builds
     restart: unless-stopped
     ports:
       - "4444:4444"                 # HTTP (or HTTPS if SSL=true is set)
@@ -147,14 +148,15 @@ services:
 #  DATABASES - enable ONE of these blocks and adjust DATABASE_URL
 ###############################################################################
 
-  postgres:              # Official image - easy defaults
-    image: postgres:18
+  postgres:
+    image: postgres:17
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=mysecretpassword
       - POSTGRES_DB=mcp
     volumes:
-      - pgdata:/var/lib/postgresql  # Postgres 18+ uses /var/lib/postgresql (not /data subdirectory)
+      - pgdata:/var/lib/postgresql/data
+      # - pgdata18:/var/lib/postgresql  # Enable for postgres 18+
     networks: [mcpnet]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
@@ -162,6 +164,26 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  mariadb:
+    image: mariadb:10.6
+    environment:
+      MARIADB_ROOT_PASSWORD: mysecretpassword
+      MARIADB_DATABASE: mcp
+      MARIADB_USER: mariadb
+      MARIADB_PASSWORD: mysecretpassword
+    volumes:
+      - mariadbdata:/var/lib/mysql
+    networks: [mcpnet]
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
 
   # mariadb:
   #   image: mariadb:11
@@ -208,7 +230,7 @@ services:
   #     dockerfile: Containerfile
   #   environment:
   #     - DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD:-mysecretpassword}@postgres:5432/mcp
-  #   command: alembic upgrade head
+  #   command: alembic -c mcpgateway/alembic.ini upgrade head
   #   depends_on:
   #     postgres:
   #       condition: service_healthy
