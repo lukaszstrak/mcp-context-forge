@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Example: Image Analysis with Granite 3.3 Vision via Ollama
 
