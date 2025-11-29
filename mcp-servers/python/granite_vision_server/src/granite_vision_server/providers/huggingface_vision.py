@@ -11,6 +11,7 @@ Granite Vision MCP Server - FastMCP Implementation
 from transformers import AutoProcessor, AutoModelForImageTextToText
 import torch
 from typing import Dict, Any
+import json
 
 # https://huggingface.co/ibm-granite/granite-vision-3.2-2b
 # pip install transformers>=4.49
@@ -57,16 +58,11 @@ async def analyze_image(
     ).to(device)
 
     # autoregressively complete prompt
-    output = vision_model.generate(**inputs, max_new_tokens=100)
+    output = vision_model.generate(**inputs, max_new_tokens=1000)
     result = processor.decode(output[0], skip_special_tokens=True)
-    description = result['description'].split(text_prompt)[1] if 'description' in result else ''
-    tags = result['tags'] if 'tags' in result else []
-    objects = result['objects'] if 'objects' in result else []
-    confidences = result['confidences'] if 'confidences' in result else []
-
     return {
-        "description": description,
-        "tags": tags,
-        "objects": objects,
-        "confidences": confidences
+        "description": result.strip(),
+        "tags": [],
+        "objects": [],
+        "confidences": []
     }
