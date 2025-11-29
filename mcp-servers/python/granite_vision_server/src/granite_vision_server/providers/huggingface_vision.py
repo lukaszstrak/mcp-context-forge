@@ -59,10 +59,14 @@ async def analyze_image(
     # autoregressively complete prompt
     output = vision_model.generate(**inputs, max_new_tokens=100)
     result = processor.decode(output[0], skip_special_tokens=True)
+    description = result['description'].split(text_prompt)[1] if 'description' in result else ''
+    tags = result['tags'] if 'tags' in result else []
+    objects = result['objects'] if 'objects' in result else []
+    confidences = result['confidences'] if 'confidences' in result else []
 
     return {
-        "description": result.strip(),
-        "tags": [],
-        "objects": [],
-        "confidences": []
+        "description": description,
+        "tags": tags,
+        "objects": objects,
+        "confidences": confidences
     }
