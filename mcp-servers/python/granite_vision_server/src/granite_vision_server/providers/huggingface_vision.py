@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite_vision_server/src/granite-vision-server/providers/huggingface_vision.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -14,7 +12,6 @@ from typing import Any, Dict
 # Third-Party
 import torch
 from typing import Dict, Any
-import json
 from transformers import AutoModelForImageTextToText, AutoProcessor
 
 # https://huggingface.co/ibm-granite/granite-vision-3.2-2b
@@ -52,12 +49,7 @@ async def analyze_image(model: str, image_data: str, analysis_type: str, include
     # autoregressively complete prompt
     output = vision_model.generate(**inputs, max_new_tokens=100)
     result = processor.decode(output[0], skip_special_tokens=True)
-    return {
-        "description": result.strip(),
-        "tags": [],
-        "objects": [],
-        "confidences": []
-    }
+    
     description = result["description"].split(text_prompt)[1] if "description" in result else ""
     tags = result["tags"] if "tags" in result else []
     objects = result["objects"] if "objects" in result else []
