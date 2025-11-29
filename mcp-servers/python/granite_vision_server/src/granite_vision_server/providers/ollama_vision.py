@@ -8,18 +8,20 @@ Granite Vision MCP Server - FastMCP Implementation
 
 """
 
+# Future
 from __future__ import annotations
-import os
+
+# Standard
 import logging
-from typing import Optional, Dict, Any, List
+import os
+from typing import Any, Dict, List, Optional
 
 try:
+    # Third-Party
     import ollama
     from ollama import Client
 except ImportError:
-    raise ImportError(
-        "The 'ollama' package is required. Install it with: pip install ollama"
-    )
+    raise ImportError("The 'ollama' package is required. Install it with: pip install ollama")
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +83,9 @@ class OllamaVisionClient:
                 return []
         except Exception as e:
             logger.error(f"Failed to list models: {e}")
+            # Standard
             import traceback
+
             traceback.print_exc()
             return []
 
@@ -120,7 +124,9 @@ class OllamaVisionClient:
             return exists
         except Exception as e:
             logger.error(f"Error checking model existence: {e}")
+            # Standard
             import traceback
+
             traceback.print_exc()
             return False
 
@@ -156,11 +162,13 @@ class OllamaVisionClient:
             if system_prompt:
                 messages.append({"role": "system", "content": system_prompt})
 
-            messages.append({
-                "role": "user",
-                "content": user_prompt,
-                "images": [image_b64],  # Ollama SDK expects raw base64 strings
-            })
+            messages.append(
+                {
+                    "role": "user",
+                    "content": user_prompt,
+                    "images": [image_b64],  # Ollama SDK expects raw base64 strings
+                }
+            )
 
             # Build options
             options: Dict[str, Any] = {

@@ -8,9 +8,12 @@ Granite Vision MCP Server - FastMCP Implementation
 
 """
 
+# Future
 from __future__ import annotations
-from ..tools.image_analysis import ImageAnalysisRequest
+
+# Local
 from ..models.granite_vision_models import SUPPORTED_ANALYSIS_TYPES
+from ..tools.image_analysis import ImageAnalysisRequest
 
 SUPPORTED_PROVIDERS = {"ollama"}
 
@@ -19,7 +22,4 @@ def validate_request(req: ImageAnalysisRequest) -> None:
     if req.provider not in SUPPORTED_PROVIDERS:
         raise ValueError(f"Unsupported provider: {req.provider}")
     if req.analysis_type not in SUPPORTED_ANALYSIS_TYPES:
-        raise ValueError(
-            f"Unsupported analysis_type: {req.analysis_type}. "
-            f"Choose from: {sorted(SUPPORTED_ANALYSIS_TYPES)}"
-        )
+        raise ValueError(f"Unsupported analysis_type: {req.analysis_type}. " f"Choose from: {sorted(SUPPORTED_ANALYSIS_TYPES)}")

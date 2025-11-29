@@ -14,18 +14,21 @@ Usage:
     python examples/image_analysis.py https://example.com/image.jpg
 """
 
-import sys
+# Standard
 import json
 from pathlib import Path
+import sys
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
+# Third-Party
+from granite_vision_server.models.granite_vision_models import build_prompts
 from granite_vision_server.providers.ollama_vision import OllamaVisionClient
+from granite_vision_server.utils.format_converters import normalize_response
 from granite_vision_server.utils.image_utils import ensure_base64
 from granite_vision_server.utils.model_validator import validate_granite_vision_setup
-from granite_vision_server.models.granite_vision_models import build_prompts
-from granite_vision_server.utils.format_converters import normalize_response
+
 
 def print_section(title: str):
     """Print a formatted section header."""
@@ -68,12 +71,7 @@ def analyze_image_file(image_path: str, analysis_type: str = "general"):
         print(f"[OK] Image loaded ({len(image_b64)} bytes base64)")
 
         # Build prompts
-        system_prompt, user_prompt = build_prompts(
-            analysis_type=analysis_type,
-            language="en",
-            max_desc=200,
-            include_confidence=True
-        )
+        system_prompt, user_prompt = build_prompts(analysis_type=analysis_type, language="en", max_desc=200, include_confidence=True)
 
         # Initialize Ollama client
         print("\n>> Connecting to Ollama...")
@@ -81,44 +79,32 @@ def analyze_image_file(image_path: str, analysis_type: str = "general"):
 
         # Analyze image
         print(f">> Analyzing with Granite 3.3 Vision ({analysis_type})...")
-        raw_response = client.analyze_image(
-            model="granite3.3-vision:2b",
-            image_b64=image_b64,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=0.2
-        )
+        raw_response = client.analyze_image(model="granite3.3-vision:2b", image_b64=image_b64, system_prompt=system_prompt, user_prompt=user_prompt, temperature=0.2)
 
         print(f"[OK] Received response ({len(raw_response)} chars)")
 
         # Normalize response
         print("\n>> Processing results...")
-        result = normalize_response(
-            raw_text=raw_response,
-            analysis_type=analysis_type,
-            language="en",
-            include_confidence=True,
-            max_desc=200
-        )
+        result = normalize_response(raw_text=raw_response, analysis_type=analysis_type, language="en", include_confidence=True, max_desc=200)
 
         # Print results
         print_section("Analysis Results")
 
         print(f"Summary:\n  {result.get('summary', 'N/A')}\n")
 
-        if result.get('objects'):
+        if result.get("objects"):
             print(f"Objects Detected:")
-            for obj in result['objects']:
+            for obj in result["objects"]:
                 print(f"  • {obj}")
             print()
 
-        if result.get('scene'):
+        if result.get("scene"):
             print(f"Scene: {result['scene']}\n")
 
-        if result.get('text_in_image'):
+        if result.get("text_in_image"):
             print(f"Text in Image: {result['text_in_image']}\n")
 
-        if result.get('confidence') is not None:
+        if result.get("confidence") is not None:
             print(f"Confidence: {result['confidence']:.2%}\n")
 
         # Print raw response for debugging
@@ -138,7 +124,9 @@ def analyze_image_file(image_path: str, analysis_type: str = "general"):
     except Exception as e:
         prefix = "[ERROR]"
         print(f"{prefix} Error: {e}")
+        # Standard
         import traceback
+
         traceback.print_exc()
         return None
 

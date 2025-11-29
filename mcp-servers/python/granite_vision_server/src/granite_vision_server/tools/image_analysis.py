@@ -8,7 +8,10 @@ Granite Vision MCP Server - FastMCP Implementation
 
 """
 
+# Future
 from __future__ import annotations
+
+# Standard
 from dataclasses import dataclass
 
 

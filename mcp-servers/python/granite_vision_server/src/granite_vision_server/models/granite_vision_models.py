@@ -8,7 +8,10 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - FastMCP Implementation
 """
 
+# Future
 from __future__ import annotations
+
+# Standard
 from typing import Tuple
 
 # Supported analysis types
@@ -40,10 +43,7 @@ def resolve_model_for_provider(model: str, provider: str) -> str:
     return model
 
 
-SYSTEM_PROMPT_TEMPLATE = (
-    "You are a meticulous, multilingual computer vision analyst. "
-    "Always return **only** strict JSON. No prose, no markdown."
-)
+SYSTEM_PROMPT_TEMPLATE = "You are a meticulous, multilingual computer vision analyst. " "Always return **only** strict JSON. No prose, no markdown."
 
 USER_PROMPT_TEMPLATE = (
     "You are given an image. Perform a {analysis_label} analysis and respond in JSON with keys: "

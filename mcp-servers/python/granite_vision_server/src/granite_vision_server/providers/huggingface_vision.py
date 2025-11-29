@@ -8,9 +8,12 @@ Granite Vision MCP Server - FastMCP Implementation
 
 """
 
-from transformers import AutoProcessor, AutoModelForImageTextToText
+# Standard
+from typing import Any, Dict
+
+# Third-Party
 import torch
-from typing import Dict, Any
+from transformers import AutoModelForImageTextToText, AutoProcessor
 
 # https://huggingface.co/ibm-granite/granite-vision-3.2-2b
 # pip install transformers>=4.49
@@ -19,18 +22,12 @@ from typing import Dict, Any
 # ------------------------
 # Image Analysis
 # ------------------------
-async def analyze_image(
-    model: str,
-    image_data: str, #path to image file
-    analysis_type: str,
-    include_conf: bool,
-    lang: str) -> Dict[str, Any]:
+async def analyze_image(model: str, image_data: str, analysis_type: str, include_conf: bool, lang: str) -> Dict[str, Any]:  # path to image file
     """
     Calls Hugging Face vision model (granite-vision-3.2-2b) to analyze an image.
     """
     if not model:
         model = "ibm-granite/granite-vision-3.2-2b"
-
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     processor = AutoProcessor.from_pretrained(model, use_fast=True)
@@ -48,25 +45,14 @@ async def analyze_image(
         },
     ]
 
-    inputs = processor.apply_chat_template(
-        conversation,
-        add_generation_prompt=False,
-        tokenize=True,
-        return_dict=True,
-        return_tensors="pt"
-    ).to(device)
+    inputs = processor.apply_chat_template(conversation, add_generation_prompt=False, tokenize=True, return_dict=True, return_tensors="pt").to(device)
 
     # autoregressively complete prompt
     output = vision_model.generate(**inputs, max_new_tokens=100)
     result = processor.decode(output[0], skip_special_tokens=True)
-    description = result['description'].split(text_prompt)[1] if 'description' in result else ''
-    tags = result['tags'] if 'tags' in result else []
-    objects = result['objects'] if 'objects' in result else []
-    confidences = result['confidences'] if 'confidences' in result else []
+    description = result["description"].split(text_prompt)[1] if "description" in result else ""
+    tags = result["tags"] if "tags" in result else []
+    objects = result["objects"] if "objects" in result else []
+    confidences = result["confidences"] if "confidences" in result else []
 
-    return {
-        "description": description,
-        "tags": tags,
-        "objects": objects,
-        "confidences": confidences
-    }
+    return {"description": description, "tags": tags, "objects": objects, "confidences": confidences}

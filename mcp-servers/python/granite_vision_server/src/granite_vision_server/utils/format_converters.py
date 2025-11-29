@@ -8,7 +8,10 @@ Granite Vision MCP Server - FastMCP Implementation
 
 """
 
+# Future
 from __future__ import annotations
+
+# Standard
 import json
 from typing import Any, Dict, List
 
@@ -22,7 +25,7 @@ def _safe_json_loads(text: str) -> Any:
         end = text.rfind("}")
         if 0 <= start < end:
             try:
-                return json.loads(text[start:end+1])
+                return json.loads(text[start : end + 1])
             except Exception:
                 pass
         return None

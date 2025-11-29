@@ -8,10 +8,14 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - Model Validation Utilities
 """
 
+# Future
 from __future__ import annotations
-import logging
-from typing import Optional, Dict, Any
 
+# Standard
+import logging
+from typing import Any, Dict, Optional
+
+# Local
 from ..providers.ollama_vision import OllamaVisionClient
 
 logger = logging.getLogger(__name__)
@@ -50,11 +54,7 @@ def validate_model_available(
         else:
             available_models = client.list_models()
             model_list = [m.get("name", "") for m in available_models]
-            msg = (
-                f"Model '{model}' is not available in Ollama. "
-                f"Available models: {', '.join(model_list) if model_list else 'none'}. "
-                f"Pull the model with: ollama pull {model}"
-            )
+            msg = f"Model '{model}' is not available in Ollama. " f"Available models: {', '.join(model_list) if model_list else 'none'}. " f"Pull the model with: ollama pull {model}"
             logger.warning(msg)
             return False, msg
 
