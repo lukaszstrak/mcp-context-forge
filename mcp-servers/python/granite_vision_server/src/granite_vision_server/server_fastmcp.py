@@ -18,7 +18,6 @@ from .tools.vqa import visual_question_answering
 from .tools.ocr import ocr_text_extraction
 from .tools.chart_analysis import analyze_charts_graphs
 from .tools.table_processing import process_tables
-from .tools.multi_modal_chat import multi_modal_chat
 from .tools.batch_processing import batch_process_images
 from .providers.ollama_vision import OllamaVisionProvider
 from .providers.watsonx_vision import WatsonxVisionProvider
@@ -63,7 +62,6 @@ mcp.tool(visual_question_answering)
 mcp.tool(ocr_text_extraction)
 mcp.tool(analyze_charts_graphs)
 mcp.tool(process_tables)
-mcp.tool(multi_modal_chat)
 mcp.tool(batch_process_images)
 
 def main():

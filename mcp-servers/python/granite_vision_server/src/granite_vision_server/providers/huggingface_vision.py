@@ -5,54 +5,19 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - FastMCP Implementation
 
 """
-
-# Standard
-from typing import Any, Dict
-
-# Third-Party
+from transformers import pipeline, AutoProcessor, AutoModelForVision2Seq
 import torch
-from typing import Dict, Any
-from transformers import AutoModelForImageTextToText, AutoProcessor
 
-# https://huggingface.co/ibm-granite/granite-vision-3.2-2b
-# pip install transformers>=4.49
+class HuggingFaceVisionProvider:
+    def __init__(self, config):
+        self.api_key = config["api_key"]
+        self.device = config["device"] if config["device"] != "auto" else ("cuda" if torch.cuda.is_available() else "cpu")
+        self.cache_dir = config["cache_dir"]
 
-
-# ------------------------
-# Image Analysis
-# ------------------------
-async def analyze_image(model: str, image_data: str, analysis_type: str, include_conf: bool, lang: str) -> Dict[str, Any]:  # path to image file
-    """
-    Calls Hugging Face vision model (granite-vision-3.2-2b) to analyze an image.
-    """
-    if not model:
-        model = "ibm-granite/granite-vision-3.2-2b"
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    processor = AutoProcessor.from_pretrained(model, use_fast=True)
-    vision_model = AutoModelForImageTextToText.from_pretrained(model).to(device)
-
-    text_prompt = "Describe the image in detail. If there is text in the image, extrapolate the meaning and purpose of the document, given its text content"
-
-    conversation = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "path": image_data},
-                {"type": "text", "text": text_prompt},
-            ],
-        },
-    ]
-
-    inputs = processor.apply_chat_template(conversation, add_generation_prompt=False, tokenize=True, return_dict=True, return_tensors="pt").to(device)
-
-    # autoregressively complete prompt
-    output = vision_model.generate(**inputs, max_new_tokens=100)
-    result = processor.decode(output[0], skip_special_tokens=True)
-    
-    description = result["description"].split(text_prompt)[1] if "description" in result else ""
-    tags = result["tags"] if "tags" in result else []
-    objects = result["objects"] if "objects" in result else []
-    confidences = result["confidences"] if "confidences" in result else []
-
-    return {"description": description, "tags": tags, "objects": objects, "confidences": confidences}
+    def infer(self, model, image_data, prompt, **kwargs):
+        # Load model and processor
+        processor = AutoProcessor.from_pretrained(model, cache_dir=self.cache_dir)
+        model_obj = AutoModelForVision2Seq.from_pretrained(model, cache_dir=self.cache_dir).to(self.device)
+        inputs = processor(text=prompt, images=image_data, return_tensors="pt").to(self.device)
+        outputs = model_obj.generate(**inputs, **kwargs)
+        return processor.decode(outputs[0], skip_special_tokens=True)
