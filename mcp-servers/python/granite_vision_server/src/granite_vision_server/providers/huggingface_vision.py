@@ -37,7 +37,7 @@ async def analyze_image(
     processor = AutoProcessor.from_pretrained(model, use_fast=True)
     vision_model = AutoModelForImageTextToText.from_pretrained(model).to(device)
 
-    text_prompt = "Describe the image in detail. If the image has animate or inanimate objects, provide a detailed description of the scene and all visible objects, and List all objects and their relationships, and describe the setting, environment, and lighting of the scene. Describe any text present in the image. If there is text in the image, extrapolate the meaning and purpose of the document, given its text content"
+    text_prompt = "Describe the image in detail. If there is text in the image, extrapolate the meaning and purpose of the document, given its text content"
 
     conversation = [
         {
@@ -58,7 +58,7 @@ async def analyze_image(
     ).to(device)
 
     # autoregressively complete prompt
-    output = vision_model.generate(**inputs, max_new_tokens=1000)
+    output = vision_model.generate(**inputs, max_new_tokens=100)
     result = processor.decode(output[0], skip_special_tokens=True)
     return {
         "description": result.strip(),
