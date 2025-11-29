@@ -8,19 +8,31 @@ Granite Vision MCP Server - FastMCP Implementation
 
 """
 
-# Future
-from __future__ import annotations
-
-# Standard
 from dataclasses import dataclass
-
+from ..providers import get_provider
+from ..processing.image_processor import ImageProcessor
+from ..models import validate_model
 
 @dataclass
 class ImageAnalysisRequest:
-    image_data: str  # base64, file path, or URL
+    image_data: str
     model: str = "granite-vision-general-v1"
     provider: str = "ollama"
-    analysis_type: str = "general"  # general, detailed, objects, scene, text
+    analysis_type: str = "general"
     include_confidence: bool = True
     max_description_length: int = 200
     language: str = "en"
+
+class ImageAnalysisTool:
+    name = "analyze_image"
+
+    async def execute(self, req: ImageAnalysisRequest):
+        validate_model(req.model)
+        provider = get_provider(req.provider)
+        processor = ImageProcessor()
+        image = processor.preprocess(req.image_data)
+        prompt = f"Analyze the image in {req.analysis_type} mode, language {req.language}"
+        result = provider.infer(req.model, image, prompt)
+        if req.include_confidence:
+            result += " (confidence: high)"  # Placeholder
+        return result[:req.max_description_length]

@@ -7,19 +7,11 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - FastMCP Implementation
 
 """
+from ..config import processing_config
 
-# Future
-from __future__ import annotations
-
-# Local
-from ..models.granite_vision_models import SUPPORTED_ANALYSIS_TYPES
-from ..tools.image_analysis import ImageAnalysisRequest
-
-SUPPORTED_PROVIDERS = {"ollama"}
-
-
-def validate_request(req: ImageAnalysisRequest) -> None:
-    if req.provider not in SUPPORTED_PROVIDERS:
-        raise ValueError(f"Unsupported provider: {req.provider}")
-    if req.analysis_type not in SUPPORTED_ANALYSIS_TYPES:
-        raise ValueError(f"Unsupported analysis_type: {req.analysis_type}. " f"Choose from: {sorted(SUPPORTED_ANALYSIS_TYPES)}")
+def validate_input(image_data):
+    # Check size, format
+    if not image_data.split(".")[-1] in processing_config["supported_formats"]:
+        raise ValueError("Unsupported format")
+    # Size check placeholder
+    return True

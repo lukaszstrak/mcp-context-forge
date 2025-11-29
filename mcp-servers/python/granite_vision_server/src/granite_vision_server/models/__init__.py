@@ -7,3 +7,6 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 
 Granite Vision MCP Server - FastMCP Implementation
 """
+
+from .granite_vision_models import SUPPORTED_MODELS
+from .model_capabilities import get_capabilities

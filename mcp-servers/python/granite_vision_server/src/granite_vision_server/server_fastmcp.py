@@ -7,18 +7,24 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - FastMCP Implementation
 
 """
-# Standard
+
+import yaml
 import logging
-import sys
-from typing import Any, Dict
-
-# Third-Party
 from fastmcp import FastMCP
-from pydantic import Field
 
-# Local
-from .processing.image_processor import process_image_analysis
-from .tools.image_analysis import ImageAnalysisRequest
+from .tools.image_analysis import analyze_image
+from .tools.document_extraction import extract_document_content
+from .tools.vqa import visual_question_answering
+from .tools.ocr import ocr_text_extraction
+from .tools.chart_analysis import analyze_charts_graphs
+from .tools.table_processing import process_tables
+from .tools.multi_modal_chat import multi_modal_chat
+from .tools.batch_processing import batch_process_images
+from .providers.ollama_vision import OllamaVisionProvider
+from .providers.watsonx_vision import WatsonxVisionProvider
+from .providers.huggingface_vision import HuggingFaceVisionProvider
+from .providers.custom_endpoints import CustomEndpointsProvider
+
 
 # Configure logging to stderr to avoid MCP protocol interference
 logging.basicConfig(
@@ -31,33 +37,34 @@ logger = logging.getLogger(__name__)
 # Create FastMCP serpipver instance
 mcp = FastMCP("granite-vision-server")
 
+providers = {}
 
-@mcp.tool(description="General image analysis and understanding")
-async def analyze_image(
-    image_data: str = Field(..., description="base64, file path, or URL"),
-    model: str = Field("granite-vision-general-v1", description="Model to use for analysis"),
-    provider: str = Field("ollama", description="Provider to use for analysis"),
-    analysis_type: str = Field("general", description="general, detailed, objects, scene, text"),
-    include_confidence: bool = Field(True, description="Whether to include confidence scores in the output"),
-    max_description_length: int = Field(200, description="Maximum length of the description"),
-    language: str = Field("en", description="Language for the output"),
-) -> Dict[str, Any]:
+def load_config():
+    with open("config.yaml", "r") as f:
+        return yaml.safe_load(f)
 
-    # Placeholder implementation
-    logger.info(f"Analyzing image with model {model} from provider {provider}")
+config = load_config()
 
-    req = ImageAnalysisRequest(
-        image_data=image_data,
-        model=model,
-        provider=provider,
-        analysis_type=analysis_type,
-        include_confidence=include_confidence,
-        max_description_length=max_description_length,
-        language=language,
-    )
+# Register providers
+if config["providers"]["ollama"]["vision_models_enabled"]:
+    providers["ollama"] = OllamaVisionProvider(config["providers"]["ollama"])
+providers["watsonx"] = WatsonxVisionProvider(config["providers"]["watsonx"])
+providers["huggingface"] = HuggingFaceVisionProvider(config["providers"]["huggingface"])
+providers["custom"] = CustomEndpointsProvider()
 
-    return await process_image_analysis(req)
+def get_provider(name):
+    return providers.get(name)
 
+mcp = FastMCP("granite-vision-server")
+
+mcp.tool(analyze_image)
+mcp.tool(extract_document_content)
+mcp.tool(visual_question_answering)
+mcp.tool(ocr_text_extraction)
+mcp.tool(analyze_charts_graphs)
+mcp.tool(process_tables)
+mcp.tool(multi_modal_chat)
+mcp.tool(batch_process_images)
 
 def main():
     """Main entry point for the FastMCP server."""

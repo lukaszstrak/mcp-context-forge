@@ -7,64 +7,20 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 
 Granite Vision MCP Server - FastMCP Implementation
 """
-# Future
-from __future__ import annotations
 
-# Local
-from ..models.granite_vision_models import build_prompts, resolve_model_for_provider
-from ..providers.ollama_vision import OllamaVisionClient
-from ..tools.image_analysis import ImageAnalysisRequest
-from ..utils.format_converters import normalize_response
-from ..utils.image_utils import ensure_base64
-from ..utils.validations import validate_request
+from PIL import Image
+import cv2
+from ..utils.image_utils import load_image
 
+class ImageProcessor:
+    def __init__(self):
+        pass
 
-async def process_image_analysis(req: ImageAnalysisRequest):
-    """
-    Orchestrates: validation -> prompt building -> provider call -> normalization.
-    Returns a provider-agnostic normalized JSON dict.
-    """
-    validate_request(req)
+    def preprocess(self, image_data):
+        image = load_image(image_data)
+        # Resize, normalize, etc.
+        image = cv2.resize(image, (224, 224))
+        return image
 
-    # Preprocess image to base64 string (no data URI header)
-    img_b64 = ensure_base64(req.image_data)
-
-    # Resolve model & prompts
-    model_name = resolve_model_for_provider(req.model, req.provider)
-    system_prompt, user_prompt = build_prompts(
-        analysis_type=req.analysis_type,
-        language=req.language,
-        max_desc=req.max_description_length,
-        include_confidence=req.include_confidence,
-    )
-
-    # Provider call (only Ollama for now)
-    if req.provider == "ollama":
-        client = OllamaVisionClient()
-        raw_text = client.analyze_image(
-            model=model_name,
-            image_b64=img_b64,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-        )
-    else:
-        raise ValueError(f"Unsupported provider: {req.provider}")
-
-    # Normalize output
-    normalized = normalize_response(
-        raw_text=raw_text,
-        analysis_type=req.analysis_type,
-        language=req.language,
-        include_confidence=req.include_confidence,
-        max_desc=req.max_description_length,
-    )
-
-    return {
-        "ok": True,
-        "provider": req.provider,
-        "model": model_name,
-        "requested_model": req.model,
-        "analysis_type": req.analysis_type,
-        "language": req.language,
-        "result": normalized,
-    }
+    def postprocess(self, output):
+        return output.strip()

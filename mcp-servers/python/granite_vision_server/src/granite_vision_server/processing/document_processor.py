@@ -7,3 +7,22 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 
 Granite Vision MCP Server - FastMCP Implementation
 """
+
+from pdf2image import convert_from_path
+from pypdf import PdfReader
+
+class DocumentProcessor:
+    def __init__(self):
+        pass
+
+    def extract_pages(self, document_data):
+        if document_data.endswith(".pdf"):
+            return convert_from_path(document_data)
+        else:
+            raise ValueError("Unsupported document format")
+
+    def process_multi_page(self, pages, func):
+        results = []
+        for page in pages:
+            results.append(func(page))
+        return results

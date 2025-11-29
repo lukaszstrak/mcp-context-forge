@@ -1,4 +1,13 @@
-# Standard
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Location: ./mcp-servers/python/granite_vision_server/src/granite_vision_server/tests/test_ollama_vision.py
+Copyright 2025
+SPDX-License-Identifier: Apache-2.0
+Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed Kazmi
+
+Granite Vision MCP Server - FastMCP Implementation
+"""
+
 import asyncio
 import base64
 import json

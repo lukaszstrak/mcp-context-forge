@@ -7,3 +7,34 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - FastMCP Implementation
 
 """
+
+from pydantic import BaseModel, Field
+from typing import List
+import concurrent.futures
+from ..providers import get_provider
+from ..models import validate_model
+
+class BatchImageRequest(BaseModel):
+    images: List[str] = Field(...)  # Multiple image data sources
+    model: str = Field(default="granite-vision-general-v1")
+    provider: str = Field(default="ollama")
+    processing_type: str = Field(default="analyze")  # analyze, ocr, extract, classify
+    parallel_processing: bool = Field(default=True)
+    max_concurrent: int = Field(default=4)
+    aggregate_results: bool = Field(default=True)
+
+async def batch_process_images(req: BatchImageRequest) -> List[str] | Dict:
+    validate_model(req.model)
+    provider = get_provider(req.provider)
+    def process_image(img):
+        return provider.infer(req.model, img, f"Process with {req.processing_type}")
+
+    if req.parallel_processing:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=req.max_concurrent) as executor:
+            results = list(executor.map(process_image, req.images))
+    else:
+        results = [process_image(img) for img in req.images]
+
+    if req.aggregate_results:
+        return {"results": results}
+    return results
