@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite_vision_server/src/granite-vision-server/providers/watsonx_vision.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -8,6 +7,7 @@ Granite Vision MCP Server - FastMCP Implementation
 
 """
 from ibm_watson_machine_learning import APIClient
+
 
 class WatsonxVisionProvider:
     def __init__(self, config):

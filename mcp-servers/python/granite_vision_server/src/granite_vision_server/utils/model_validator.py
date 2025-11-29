@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite_vision_server/src/granite_vision_server/utils/model_validator.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -13,7 +12,7 @@ from __future__ import annotations
 
 # Standard
 import logging
-from typing import Any, Dict, Optional
+from typing import Any
 
 # Local
 from ..providers.ollama_vision import OllamaVisionClient
@@ -24,7 +23,7 @@ logger = logging.getLogger(__name__)
 def validate_model_available(
     model: str,
     provider: str = "ollama",
-    base_url: Optional[str] = None,
+    base_url: str | None = None,
 ) -> tuple[bool, str]:
     """
     Validate that a model is available in the specified provider.
@@ -67,8 +66,8 @@ def validate_model_available(
 def get_model_info(
     model: str,
     provider: str = "ollama",
-    base_url: Optional[str] = None,
-) -> Optional[Dict[str, Any]]:
+    base_url: str | None = None,
+) -> dict[str, Any] | None:
     """
     Get detailed information about a model.
 

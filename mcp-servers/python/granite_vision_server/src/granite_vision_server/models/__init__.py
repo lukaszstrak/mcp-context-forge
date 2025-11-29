@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite_vision_server/src/granite_vision_server/models/init__.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0

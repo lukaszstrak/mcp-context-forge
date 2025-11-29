@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite_vision_server/src/granite-vision-server/providers/custom_endpoints.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -8,6 +7,7 @@ Granite Vision MCP Server - FastMCP Implementation
 
 """
 import requests
+
 
 class CustomEndpointsProvider:
     def __init__(self):

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite_vision_server/src/granite_vision_server/tests/test_server.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -9,8 +8,8 @@ Granite Vision MCP Server - FastMCP Implementation
 """
 
 # Standard
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
 # Third-Party
 from granite_vision_server.server_fastmcp import doc_ops

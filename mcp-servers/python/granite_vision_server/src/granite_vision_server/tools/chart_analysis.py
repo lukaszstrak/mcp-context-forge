@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite-vision-server/src/granite-vision-server/tools/chart_analysis.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -8,11 +7,12 @@ Granite Vision MCP Server - FastMCP Implementation
 
 """
 
-from typing import Dict
 
 from pydantic import BaseModel, Field
-from ..providers import get_provider
+
 from ..models import validate_model
+from ..providers import get_provider
+
 
 class ChartAnalysisRequest(BaseModel):
     image_data: str = Field(...)
@@ -24,7 +24,7 @@ class ChartAnalysisRequest(BaseModel):
     extract_legend: bool = Field(default=True)
     output_format: str = Field(default="json")  # json, csv, description
 
-async def analyze_charts_graphs(req: ChartAnalysisRequest) -> str | Dict:
+async def analyze_charts_graphs(req: ChartAnalysisRequest) -> str | dict:
     validate_model(req.model)
     provider = get_provider(req.provider)
     prompt = f"Analyze chart of type {req.chart_type}"

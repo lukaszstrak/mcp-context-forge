@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite_vision_server/src/granite-vision-server/tools/table_processing.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -9,9 +8,11 @@ Granite Vision MCP Server - FastMCP Implementation
 """
 
 from pydantic import BaseModel, Field
-from ..providers import get_provider
-from ..processing.table_processor import TableProcessor
+
 from ..models import validate_model
+from ..processing.table_processor import TableProcessor
+from ..providers import get_provider
+
 
 class TableProcessingRequest(BaseModel):
     image_data: str = Field(...)

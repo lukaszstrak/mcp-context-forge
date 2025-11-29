@@ -15,6 +15,13 @@ dependencies = [
   "Pillow>=10.0.0",
   "requests>=2.31.0",
   "typing-extensions>=4.5.0",
+  "pdf2image>=1.17.0",
+  "pypdf>=6.4.0",
+  "pandas>=2.3.3",
+  "pytesseract>=0.3.13",
+  "transformers>=4.57.3",
+  "torch>=2.9.1",
+  "ruff>=0.14.2",
 ]
 
 [project.optional-dependencies]

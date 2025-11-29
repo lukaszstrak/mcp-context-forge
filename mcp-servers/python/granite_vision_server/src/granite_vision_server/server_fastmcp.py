@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite-vision-server/src/granite-vision-server/server.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -7,23 +6,18 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - FastMCP Implementation
 
 """
-
-import yaml
 import logging
+import sys
+
 from fastmcp import FastMCP
 
-from .tools.image_analysis import analyze_image
-from .tools.document_extraction import extract_document_content
-from .tools.vqa import visual_question_answering
-from .tools.ocr import ocr_text_extraction
-from .tools.chart_analysis import analyze_charts_graphs
-from .tools.table_processing import process_tables
 from .tools.batch_processing import batch_process_images
-from .providers.ollama_vision import OllamaVisionProvider
-from .providers.watsonx_vision import WatsonxVisionProvider
-from .providers.huggingface_vision import HuggingFaceVisionProvider
-from .providers.custom_endpoints import CustomEndpointsProvider
-
+from .tools.chart_analysis import analyze_charts_graphs
+from .tools.document_extraction import extract_document_content
+from .tools.image_analysis import analyze_image
+from .tools.ocr import ocr_text_extraction
+from .tools.table_processing import process_tables
+from .tools.vqa import visual_question_answering
 
 # Configure logging to stderr to avoid MCP protocol interference
 logging.basicConfig(
@@ -34,25 +28,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Create FastMCP serpipver instance
-mcp = FastMCP("granite-vision-server")
-
-providers = {}
-
-def load_config():
-    with open("config.yaml", "r") as f:
-        return yaml.safe_load(f)
-
-config = load_config()
-
-# Register providers
-if config["providers"]["ollama"]["vision_models_enabled"]:
-    providers["ollama"] = OllamaVisionProvider(config["providers"]["ollama"])
-providers["watsonx"] = WatsonxVisionProvider(config["providers"]["watsonx"])
-providers["huggingface"] = HuggingFaceVisionProvider(config["providers"]["huggingface"])
-providers["custom"] = CustomEndpointsProvider()
-
-def get_provider(name):
-    return providers.get(name)
 
 mcp = FastMCP("granite-vision-server")
 

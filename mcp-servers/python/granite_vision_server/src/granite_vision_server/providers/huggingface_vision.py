@@ -5,8 +5,9 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - FastMCP Implementation
 
 """
-from transformers import pipeline, AutoProcessor, AutoModelForVision2Seq
 import torch
+from transformers import AutoModelForVision2Seq, AutoProcessor
+
 
 class HuggingFaceVisionProvider:
     def __init__(self, config):

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite-vision-server/src/granite-vision-server/tools/document_extraction.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -8,11 +7,13 @@ Granite Vision MCP Server - FastMCP Implementation
 
 """
 
+
 from pydantic import BaseModel, Field
-from typing import Optional
-from ..providers import get_provider
-from ..processing.document_processor import DocumentProcessor
+
 from ..models import validate_model
+from ..processing.document_processor import DocumentProcessor
+from ..providers import get_provider
+
 
 class DocumentExtractionRequest(BaseModel):
     document_data: str = Field(..., description="PDF, image, or multi-page document")

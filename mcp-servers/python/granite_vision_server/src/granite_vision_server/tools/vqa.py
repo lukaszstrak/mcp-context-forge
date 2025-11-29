@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite-vision-server/src/granite-vision-server/tools/vqa.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -8,17 +7,19 @@ Granite Vision MCP Server - FastMCP Implementation
 
 """
 
+
 from pydantic import BaseModel, Field
-from typing import Optional
-from ..providers import get_provider
+
 from ..models import validate_model
+from ..providers import get_provider
+
 
 class VQARequest(BaseModel):
     image_data: str = Field(...)
     question: str = Field(...)
     model: str = Field(default="granite-multimodal-8b")
     provider: str = Field(default="ollama")
-    context: Optional[str] = Field(default=None)  # Additional context
+    context: str | None = Field(default=None)  # Additional context
     answer_type: str = Field(default="natural")  # natural, short, boolean, multiple_choice
     confidence_threshold: float = Field(default=0.7)
 

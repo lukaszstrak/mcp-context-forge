@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite_vision_server/src/granite_vision_server/processing/image_processor.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -8,9 +7,10 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - FastMCP Implementation
 """
 
-from PIL import Image
 import cv2
+
 from ..utils.image_utils import load_image
+
 
 class ImageProcessor:
     def __init__(self):

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Location: ./mcp-servers/python/granite-vision-server/src/granite-vision-server/utils/format_converters.py
 Copyright 2025
 SPDX-License-Identifier: Apache-2.0
@@ -7,8 +6,8 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - FastMCP Implementation
 
 """
-import pandas as pd
 import json
+
 
 def to_markdown(data):
     return str(data)  # Placeholder

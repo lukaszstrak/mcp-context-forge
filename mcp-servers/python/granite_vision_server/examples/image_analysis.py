@@ -16,8 +16,8 @@ Usage:
 
 # Standard
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -93,7 +93,7 @@ def analyze_image_file(image_path: str, analysis_type: str = "general"):
         print(f"Summary:\n  {result.get('summary', 'N/A')}\n")
 
         if result.get("objects"):
-            print(f"Objects Detected:")
+            print("Objects Detected:")
             for obj in result["objects"]:
                 print(f"  • {obj}")
             print()
