@@ -26,7 +26,7 @@ async def analyze_image(
     include_conf: bool,
     lang: str) -> Dict[str, Any]:
     """
-    Calls Ollama vision model (granite3.2-vision) to analyze an image.
+    Calls Hugging Face vision model (granite-vision-3.2-2b) to analyze an image.
     """
     if not model:
         model = "ibm-granite/granite-vision-3.2-2b"
