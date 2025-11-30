@@ -7,6 +7,7 @@ Authors: Anna Topol, Łukasz Strąk, Hong Wei Jia, Lisette Contreras, Mohammed K
 Granite Vision MCP Server - FastMCP Implementation
 """
 
+from typing import Dict
 import yaml
 
 from .custom_endpoints import CustomEndpointsProvider
@@ -21,7 +22,7 @@ def load_config():
 
 config = load_config()
 
-providers = {}
+providers: Dict[str, OllamaVisionProvider | WatsonxVisionProvider | HuggingFaceVisionProvider | CustomEndpointsProvider] = {}
 
 # Register providers
 if config["providers"]["ollama"]["vision_models_enabled"]:
@@ -30,5 +31,5 @@ providers["watsonx"] = WatsonxVisionProvider(config["providers"]["watsonx"])
 providers["huggingface"] = HuggingFaceVisionProvider(config["providers"]["huggingface"])
 providers["custom"] = CustomEndpointsProvider()
 
-def get_provider(name):
+def get_provider(name) -> OllamaVisionProvider | WatsonxVisionProvider | HuggingFaceVisionProvider | CustomEndpointsProvider:
     return providers.get(name)
