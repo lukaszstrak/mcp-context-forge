@@ -8,10 +8,10 @@ Granite Vision MCP Server - FastMCP Implementation
 """
 from pydantic import BaseModel, Field
 
-from ..models import validate_model
-from ..processing.image_processor import ImageProcessor
+from pydantic import BaseModel, Field
 from ..providers import get_provider
-
+from ..processing.image_processor import ImageProcessor
+from ..models import validate_model
 
 class ImageAnalysisRequest(BaseModel):
     image_data: str = Field(..., description="base64, file path, or URL")
