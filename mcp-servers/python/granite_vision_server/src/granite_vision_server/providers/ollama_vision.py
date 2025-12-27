@@ -11,7 +11,7 @@ from ollama import Client
 
 class OllamaVisionProvider:
     def __init__(self, config):
-        self.client = Client(host=config["base_url"], timeout=config["timeout"])
+        self.client = Client(host=config["base_url"], timeout=config["timeout"], **config)
 
     def infer(self, model, image_data, prompt, **kwargs):
         # Implement Ollama vision inference

@@ -260,3 +260,4 @@ plugins_rust/Cargo.lock
 
 # CDN vendor assets (downloaded during container build)
 mcpgateway/static/vendor/
+mcp-servers/python/granite_vision_server/uv.lock

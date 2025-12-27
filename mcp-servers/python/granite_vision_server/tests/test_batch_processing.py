@@ -8,6 +8,7 @@ Granite Vision MCP Server - FastMCP Implementation
 """
 
 from unittest.mock import MagicMock, patch
+import os.path
 
 import pytest
 
@@ -16,7 +17,7 @@ from granite_vision_server.tools.batch_processing import BatchImageRequest, batc
 
 @pytest.mark.asyncio
 async def test_batch_processing():
-    req = BatchImageRequest(images=["img1.jpg", "img2.jpg"])
+    req = BatchImageRequest(images=[os.path.join("documents", "img1.jpg"), os.path.join("documents", "img2.jpg")])
 
     mock_provider = MagicMock()
     mock_provider.infer.side_effect = ["result1", "result2"]

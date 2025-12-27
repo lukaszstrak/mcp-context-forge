@@ -51,7 +51,7 @@ def main():
         default="stdio",
         help="Transport mode (stdio or http)",
     )
-    parser.add_argument("--host", default="0.0.0.0", help="HTTP host")
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP host")
     parser.add_argument("--port", type=int, default=9004, help="HTTP port")
 
     args = parser.parse_args()
