@@ -23,7 +23,7 @@ dependencies = [
   "torch>=2.9.1",
   "ruff>=0.14.2",
   "pytest>=8.4.2",
-  "ibm-watson-machine-learning",
+  "ibm-watson-machine-learning>=1.0.325"
 ]
 
 [project.optional-dependencies]
